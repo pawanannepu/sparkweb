@@ -1,0 +1,10 @@
+{
+  "extends": "@spark/typescript-config/base.json",
+  "compilerOptions": {
+    "module": "Preserve",
+    "moduleResolution": "Bundler",
+    "declaration": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}

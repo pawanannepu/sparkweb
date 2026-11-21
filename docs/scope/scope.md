@@ -11,8 +11,8 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 
 | # | Feature | Phase | Status |
 |---|---------|-------|--------|
-| 1 | Stack and architecture | Foundation | planned |
-| 2 | Coding standards and tooling | Foundation | planned |
+| 1 | Stack and architecture | Foundation | in-progress |
+| 2 | Coding standards and tooling | Foundation | in-progress |
 | 3 | Data model | Foundation | planned |
 | 4 | Design system and UI foundation | Foundation | planned |
 | 5 | Core generation loop and live preview | Slice 1 | planned |
@@ -27,20 +27,23 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 
 ## Foundations
 
-### 1. Stack and architecture · needs a decision
+### 1. Stack and architecture
 Select the application stack, determine runtime boundaries, and scaffold a runnable full stack project so every future slice builds on real code.
 **Done when:** the stack is recorded in a spec, the empty scaffold boots locally, and dev servers pass basic build checks.
-- [ ] Decide the stack (spec): `/architect stack & architecture`
-- [ ] Scaffold from the decision: `/develop stack & architecture`
-- [ ] Smoke check it runs: `/test`
+spec [0001](../specs/0001-stack-and-architecture/index.md)
+code in `apps/web`, `packages/db`, `packages/sandbox`, `packages/shared`
+- [x] Decide the stack (spec): `/architect stack & architecture`
+- [x] Scaffold from the decision: `/develop stack & architecture`
+- [x] Smoke check it runs: `/test`
 (basis: foundations before features, stack decision sets directory layout and core dependencies)
 
 ### 2. Coding standards and tooling
 Capture project conventions into root AGENTS.md, then install lint, format, typecheck, and pre-commit checks from the real scaffolded project.
 **Done when:** root AGENTS.md reflects the real stack, and lint, format, and typecheck commands run clean.
-- [ ] Capture conventions and tooling choices: `/audit`
-- [ ] Install the tooling: `/develop tooling`
-- [ ] Check it runs clean: `/test`
+code in `biome.json`, `.husky`, `.github/workflows`
+- [x] Capture conventions and tooling choices: `/audit`
+- [x] Install the tooling: `/develop tooling`
+- [x] Check it runs clean: `/test`
 (basis: code quality tooling must enforce standards across every generated and host file)
 
 ### 3. Data model · needs a decision

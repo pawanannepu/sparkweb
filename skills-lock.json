@@ -1,0 +1,33 @@
+{
+  "version": 2,
+  "skills": {
+    "drizzle-orm-patterns": {
+      "source": "giuseppe-trisciuoglio/developer-kit",
+      "commit": "fe73fb33a09ee6562eeec7415a3f9a3bcf795177",
+      "sourceType": "github",
+      "skillPath": "plugins/developer-kit-typescript/skills/drizzle-orm-patterns/SKILL.md",
+      "computedHash": "a5eaf7e1ff588b6f03c7fc71fb2850c0bf36fb66949ad41fd012ae1bc70e6c84"
+    },
+    "next-dev-loop": {
+      "source": "vercel/next.js",
+      "commit": "794836c3cbb750d1e34f99e210b39b7bdfbc4c58",
+      "sourceType": "github",
+      "skillPath": "skills/next-dev-loop/SKILL.md",
+      "computedHash": "78ebafaabaa8fd170da34957943f5845436f66c04daf85a93fc759f38a50a4ca"
+    },
+    "playwright-test-generator": {
+      "source": "voidmatcha/e2e-skills",
+      "commit": "e9fb16b364b6c77a71a4a2421e95cd23b098d03f",
+      "sourceType": "github",
+      "skillPath": "skills/playwright-test-generator/SKILL.md",
+      "computedHash": "e4cfaf010f9a979d26406f4a1222c09ef4f95564de6ac5d5704fc44e4dec9af1"
+    },
+    "turborepo": {
+      "source": "vercel/turborepo",
+      "commit": "b911d19d45f60c96cb33c756b6e238ad4d32bb73",
+      "sourceType": "github",
+      "skillPath": "skills/turborepo/SKILL.md",
+      "computedHash": "49bb6427015253ce5d93f15dfa6c9ade3f8528f0fbe54769b6da1e1458f058d4"
+    }
+  }
+}

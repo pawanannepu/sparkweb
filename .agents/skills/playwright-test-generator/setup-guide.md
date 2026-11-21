@@ -1,0 +1,53 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# Generator setup guidance
+
+Read this when generation prerequisites are missing, the project has no E2E/lint setup, or its instruction file lacks the test-authoring memo. Explain the relevant path; do not execute setup commands, install packages, or write configuration under this skill, except the memo command below after the user's explicit yes. Report generation, scan and execution as not done when prerequisites are absent. A separately requested installation task can prepare the environment under its own authority.
+
+## No E2E setup versus no tests
+
+Inspect package metadata, Playwright config and existing scripts without executing them. No spec files alone is not missing setup: an installed Playwright Test runner, usable config, approved official agents/MCP and a prepared disposable loopback stack allow first-test generation.
+
+No Playwright dependency or config: explain that the test runner must be initialized first. Link the [official installation guide](https://playwright.dev/docs/intro). Ask the user to initialize Playwright with the project's existing package manager in a separate setup task, reviewing dependency, config, script and browser changes. Do not assume npm in a pnpm/yarn workspace, overwrite existing files, or invent a baseURL. Request the owning package, intended local URL and start/test commands. Once the local runner, config, browser and disposable stack are prepared, recommend the e2e-skills installer with `--project` from its reviewed checkout. Then check official agents and session MCP below.
+
+## Doctor and monorepos
+
+For setup questions, suggest the read-only `e2e-skills doctor --host <claude|codex> --project <abs dir>`; never add `--check-server` (it executes project code) without exact approval. Doctor lists the `playwright.config.*` files it finds, their owning package, missing skills such as `e2e-reviewer`, and optional lint. Monorepo: report the config's owning package and use it as `--project`.
+
+## Existing development server
+
+Reuse an already running, approved loopback dev server and its existing real test backend or mocks. Confirm only services and data reached by the requested scenario. For writes, establish isolated test data and cleanup/reset; read-only scenarios need no reset method. A disposable test-data boundary does not require replacing the app, creating a mock server, using an in-memory database, or provisioning a new deployment. Mark services the scenario does not use as N/A.
+
+Inspect non-sensitive existing configuration and reuse confirmed scope/approvals; ask only about an unresolved destination, data boundary or, for writes, cleanup/reset method. Do not propose mock infrastructure just because the project uses a real API/database. Production or shared non-test data remain ineligible, and a loopback frontend alone does not prove backend safety.
+
+Mocking is an optional project/scenario choice, never a prerequisite imposed by this skill. Suggest a new mock only as an optional alternative when the scenario would write to a real backend and an isolated test-data boundary cannot be established. A real backend alone is not a reason to suggest mocks; existing mocks and read-only scenarios get no new-mock proposal.
+
+## Official agents and session tools
+
+Read `references/readiness.md` before deciding which prerequisites are missing. The same registration, approval and session-tool checks apply; setup guidance does not clear them.
+
+When blocked, report together: `BLOCKED: <observed reason>. Needed: <specific input or approval>. NOT done: <unrun checks>.` Include all already-confirmed blockers, without inventing unknown prerequisites or restarting a completed setup step. For a remote target, explicitly request a disposable loopback URL and the relevant config/stack information. Existing approved facts need no repeated questions.
+
+Not-ready message: when the official agents or `generator_write_test` are missing, print the block for the current host only, with the project root filled in, then stop. The user runs these commands; this skill runs nothing itself, even after a yes.
+
+- Claude Code: `In <project root>, run: npx --no-install playwright init-agents --loop=claude` — it writes `.claude/agents/playwright-test-*.md` and replaces `.mcp.json` (back up other servers first). `Then restart Claude Code in the project and approve the playwright-test MCP server.`
+- Codex: `In <project root>, run: npx --no-install playwright init-agents --loop=codex` — it writes `.codex/agents/playwright_test_*.toml` only. `Then declare playwright-test (npx --no-install playwright run-test-mcp-server) in the trusted project's .codex/config.toml, restart Codex in the project and approve the server.`
+
+Add which prerequisite was observed missing, and `generation, scan and execution: NOT done`.
+
+1. In the project: `npx --no-install playwright init-agents --loop=<claude|codex>`. Writes repo files (agents, `specs/README.md`, seed spec); this skill never runs it.
+2. Declare `playwright-test` (`npx --no-install playwright run-test-mcp-server`) in the host with tool approval. Claude Code: `init-agents` wrote `.mcp.json`; approve its prompt. Codex: `init-agents` declares it only inside the agent file; declare it in trusted-project `.codex/config.toml` or user `~/.codex/config.toml` yourself. Headless, existing config; expose `generator_write_test`. Missing tools: check server errors; `required = true`, `mcp_optional_startup_grace_ms = 0` wait for startup. Keep Codex sessions persistent.
+3. Start a new session and ask again.
+
+Tool absence alone is not approval evidence. Distinguish missing configuration, disabled server/tools, startup failure, and tools not exposed in the active session. The installer's `--check` verifies server discovery only, not host approval or session visibility; use it only as a separately authorized setup diagnostic. Never change host trust/approval or global settings to make this skill proceed.
+
+## Test-authoring memo in the instruction file
+
+Every delegated planner/generator prompt already carries the text of `test-authoring-memo.md`, pasted unchanged. Offer the memo for an instruction file only when the requested feature has a server write or an optimistic UI update; for a feature without either, such as a read-only page, do not offer it. Placement depends on the host: for Claude Code, `CLAUDE.md` in the project's E2E test directory (the directory holding the specs, such as the Playwright `testDir`); for Codex, `AGENTS.md` in the repository root. An instruction file is loaded in sessions that work there, including those that do not use this skill; on some hosts sub-agents do not inherit the project instruction file, which is why the skill also passes the memo in the delegated prompt.
+
+In a dev pilot, Claude caught about as many failure-path faults with the memo in the E2E test directory as in the root (52/54 vs 53/54), while Codex caught fewer with it in the test directory (30/54 vs 44/54) even though it opened that `AGENTS.md` in every cell, so Codex keeps the root placement. Alternatively, a memo in the E2E test directory's `AGENTS.md` also works for Codex when the Codex session is started in that directory, where it loads at startup (in a dev pilot the memo reached the main agent and every sub-agent in 9 of 9 runs, and 41/54 failure-path faults were caught vs 44/54 with the root file); relative paths then resolve from that directory (one of nine runs wrote the spec to `tests/tests/...`), so give paths relative to the session's directory.
+
+If that file is missing or has neither the `# Test authoring notes` heading nor an `<!-- e2e-skills:test-authoring-memo` marker, tell the user and show the exact command, with `--dry-run` first: `e2e-skills guidance --host claude --project <abs E2E test dir> --memo` for Claude Code, or `e2e-skills guidance --host codex --project <abs repository root> --memo` for Codex. Ask for a yes before anything writes to `CLAUDE.md` or `AGENTS.md`. Without a yes, write nothing to either file, do not paste or edit the memo there yourself, and report the offer as an optional follow-up; delegation does not wait for it. With a yes, run the installed `e2e-skills` command, never a downloading `npx`; when it is not installed, give the user the command from the installation guide to run themselves.
+
+## No project lint rules
+
+Missing ESLint configuration or `eslint-plugin-playwright` does not block generation or the bundled scanner. Keep the pinned scanner invocation in `references/execution-and-report.md` unchanged: it disables target-controlled ESLint and downloads. Report optional ESLint as skipped, not lint-clean; a failed scan or missing scanner prerequisite still follows that execution contract. Follow existing lint conventions; do not install plugins, create lint files or replace existing rules during generation. `e2e-skills doctor --project` reports the optional `eslint-plugin-playwright` recommendation.
