@@ -14,7 +14,7 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 | 1 | Stack and architecture | Foundation | in-progress |
 | 2 | Coding standards and tooling | Foundation | in-progress |
 | 3 | Data model | Foundation | in-progress |
-| 4 | Design system and UI foundation | Foundation | planned |
+| 4 | Design system and UI foundation | Foundation | in-progress |
 | 5 | Core generation loop and live preview | Slice 1 | planned |
 | 6 | Visual canvas inspector and direct styling | Slice 2 | planned |
 | 7 | Self healing verification engine | Slice 3 | planned |
@@ -62,10 +62,21 @@ spec [0002](../specs/0002-data-model/index.md) · code in `packages/db`
 - [x] Document it: `/document data model`
 (basis: data model is the costliest thing to redo)
 
-### 4. Design system and UI foundation · needs a decision
+### 4. Design system and UI foundation
 Establish the visual system, accessible component library, responsive split pane builder layout, and live preview iframe container.
 **Done when:** design system specification defines typography, color tokens, responsive layout rules, keyboard navigation, and accessible base controls.
-- [ ] Design it (spec): `/architect design system & UI foundation`
+spec [0003](../specs/0003-design-system-and-ui-foundation/index.md) · code in `apps/web/src/components`, `apps/web/src/hooks`
+- [x] Design it (spec): `/architect design system & UI foundation`
+- [x] Build it: `/develop design system & UI foundation`
+  - [x] Design tokens, typography, and flash prevention script (AC-1)
+  - [x] Accessible base UI component primitives (AC-2)
+  - [x] Workspace layout hook with debounced local storage persistence (AC-4)
+  - [x] Resizable workbench, collapsible chat panel, and mobile switcher (AC-3, AC-5)
+  - [x] Live preview container, device presets, and postMessage bridge (AC-6, AC-7)
+- [x] Verify it: `/check verify design system & UI foundation`
+- [x] Test it: `/test design system & UI foundation`
+- [x] Review it (fresh model): `/check review design system & UI foundation`
+- [x] Document it: `/document design system & UI foundation`
 (basis: WCAG 2.1 accessible base components and consistent responsive design)
 
 ## Slice 1: Core generation loop and live preview
