@@ -13,7 +13,7 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 |---|---------|-------|--------|
 | 1 | Stack and architecture | Foundation | in-progress |
 | 2 | Coding standards and tooling | Foundation | in-progress |
-| 3 | Data model | Foundation | planned |
+| 3 | Data model | Foundation | in-progress |
 | 4 | Design system and UI foundation | Foundation | planned |
 | 5 | Core generation loop and live preview | Slice 1 | planned |
 | 6 | Visual canvas inspector and direct styling | Slice 2 | planned |
@@ -46,10 +46,20 @@ code in `biome.json`, `.husky`, `.github/workflows`
 - [x] Check it runs clean: `/test`
 (basis: code quality tooling must enforce standards across every generated and host file)
 
-### 3. Data model · needs a decision
+### 3. Data model
 Define core persistence models for user accounts, personal API keys, project metadata, prompt threads, generated file trees, and deployment states.
 **Done when:** schema and relational constraints support the core generation loop, snapshot branches, and published deployments without breaking changes.
-- [ ] Design it (spec): `/architect data model`
+spec [0002](../specs/0002-data-model/index.md) · code in `packages/db`
+- [x] Design it (spec): `/architect data model`
+- [x] Build it: `/develop data model`
+  - [x] Schema declarations and relations for auth, keys, projects, threads, snapshots, deployments (AC-1, AC-4, AC-5)
+  - [x] Encryption and tree hash cryptographic helpers (AC-2, AC-3)
+  - [x] Migration generation and runner verification (AC-6)
+  - [x] Typed domain queries, mutations, and projection helpers (AC-1, AC-2, AC-3, AC-5)
+- [x] Verify it: `/check verify data model`
+- [x] Test it: `/test data model`
+- [x] Review it (fresh model): `/check review data model`
+- [x] Document it: `/document data model`
 (basis: data model is the costliest thing to redo)
 
 ### 4. Design system and UI foundation · needs a decision

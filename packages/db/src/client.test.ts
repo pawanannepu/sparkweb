@@ -15,4 +15,15 @@ describe("db client singleton", () => {
     // Act & Assert
     expect(globalObj.conn).toBeDefined();
   });
+
+  it("creates an in memory pglite database instance with query schema", async () => {
+    const { PGlite } = await import("@electric-sql/pglite");
+    const { createPgliteDatabase } = await import("./client");
+    const pglite = new PGlite();
+    const testDb = createPgliteDatabase(pglite);
+
+    expect(testDb).toBeDefined();
+    expect(typeof testDb.select).toBe("function");
+    await pglite.close();
+  });
 });

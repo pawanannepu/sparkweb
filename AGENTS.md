@@ -41,9 +41,7 @@ pnpm lint
 
 ## Git
 
-- integration: on
-- branch prefix: feat/
-- commit: per-milestone
+- integration: off
 
 ## Specs
 
