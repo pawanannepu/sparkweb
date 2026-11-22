@@ -67,9 +67,16 @@ export function BuilderWorkbench({
 
         <Group
           orientation="horizontal"
-          onLayoutChanged={(sizes) => {
-            if (Array.isArray(sizes) && sizes.length === 2 && !layout.isChatCollapsed) {
-              updateSizes(sizes[0], sizes[1]);
+          onLayoutChanged={(layoutMap) => {
+            if (!layout.isChatCollapsed && layoutMap) {
+              const values = Array.isArray(layoutMap)
+                ? layoutMap
+                : [layoutMap["chat-panel"], layoutMap["preview-panel"]].filter(
+                    (v): v is number => typeof v === "number"
+                  );
+              if (values.length === 2) {
+                updateSizes(values[0], values[1]);
+              }
             }
           }}
           className="h-full w-full flex"
@@ -78,9 +85,10 @@ export function BuilderWorkbench({
           {!layout.isChatCollapsed && (
             <>
               <Panel
-                defaultSize={layout.chatPanelSize}
-                minSize={15}
-                maxSize={50}
+                id="chat-panel"
+                defaultSize={`${layout.chatPanelSize}%`}
+                minSize="15%"
+                maxSize="50%"
                 className="h-full overflow-hidden"
               >
                 {React.isValidElement(chatContent)
@@ -106,8 +114,9 @@ export function BuilderWorkbench({
 
           {/* Right Live Preview Canvas */}
           <Panel
-            defaultSize={layout.isChatCollapsed ? 100 : layout.previewPanelSize}
-            minSize={50}
+            id="preview-panel"
+            defaultSize={layout.isChatCollapsed ? "100%" : `${layout.previewPanelSize}%`}
+            minSize="50%"
             className="relative flex h-full flex-col overflow-hidden"
           >
             <div className="relative flex h-full w-full flex-col">

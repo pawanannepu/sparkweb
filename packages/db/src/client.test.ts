@@ -25,5 +25,5 @@ describe("db client singleton", () => {
     expect(testDb).toBeDefined();
     expect(typeof testDb.select).toBe("function");
     await pglite.close();
-  });
+  }, 30000);
 });

@@ -1,15 +1,16 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("Scaffold navigation and headers", () => {
-  test("landing page loads with scaffold ready badge (covers: AC-1)", async ({ page }) => {
+  test("workbench loads with builder shell and preview container (covers: AC-1)", async ({
+    page,
+  }) => {
     // Act
     await page.goto("/");
 
     // Assert
-    await expect(page.getByRole("heading", { level: 1 })).toContainText(
-      "Build full stack applications from natural language"
-    );
-    await expect(page.getByText("sparkweb scaffold ready")).toBeVisible();
+    await expect(page.getByText("sparkweb", { exact: true })).toBeVisible();
+    await expect(page.getByText("Demo Application")).toBeVisible();
+    await expect(page.getByTitle("Sparkweb Live Preview")).toBeVisible();
   });
 
   test("sandbox route returns credentialless and same-origin headers (covers: AC-2)", async ({

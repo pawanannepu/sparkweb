@@ -8,7 +8,7 @@ describe("BuilderPage Component", () => {
     render(<BuilderPage />);
 
     expect(screen.getByText("sparkweb")).toBeInTheDocument();
-    expect(screen.getByText("CRM Dashboard Demo")).toBeInTheDocument();
+    expect(screen.getByText("Demo Application")).toBeInTheDocument();
     expect(screen.getAllByText("Prompt Assistant").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Welcome to sparkweb/i).length).toBeGreaterThan(0);
   });
@@ -22,19 +22,20 @@ describe("BuilderPage Component", () => {
     expect(screen.getAllByLabelText("Preview address bar").length).toBeGreaterThan(0);
   });
 
-  it("allows user to type a prompt and submit via form", async () => {
+  it("allows user to type a prompt and submit via composer", async () => {
     render(<BuilderPage />);
 
-    const textareas = screen.getAllByPlaceholderText(/Describe what to add or adjust/i);
+    const textareas = screen.getAllByPlaceholderText(/Describe the application or component/i);
     const textarea = textareas[0];
+    if (!textarea) throw new Error("Textarea element not found");
 
     fireEvent.change(textarea, { target: { value: "Build a customer feedback form" } });
 
-    const form = textarea.closest("form");
-    if (!form) throw new Error("Form element not found");
-    fireEvent.submit(form);
+    const generateButtons = screen.getAllByRole("button", { name: /generate/i });
+    const generateBtn = generateButtons[0];
+    if (!generateBtn) throw new Error("Generate button not found");
+    fireEvent.click(generateBtn);
 
     expect(screen.getAllByText("Build a customer feedback form").length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Creating components and routes/i).length).toBeGreaterThan(0);
   });
 });

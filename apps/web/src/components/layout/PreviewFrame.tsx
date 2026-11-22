@@ -95,6 +95,7 @@ export function PreviewFrame({
           src={src}
           title="Sparkweb Live Preview"
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+          allow="cross-origin-isolated; autoplay; camera; microphone; geolocation"
           className="h-full w-full border-0 bg-background"
           onLoad={onLoad}
         />

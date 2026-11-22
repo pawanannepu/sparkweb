@@ -15,7 +15,7 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 | 2 | Coding standards and tooling | Foundation | in-progress |
 | 3 | Data model | Foundation | in-progress |
 | 4 | Design system and UI foundation | Foundation | in-progress |
-| 5 | Core generation loop and live preview | Slice 1 | planned |
+| 5 | Core generation loop and live preview | Slice 1 | in-progress |
 | 6 | Visual canvas inspector and direct styling | Slice 2 | planned |
 | 7 | Self healing verification engine | Slice 3 | planned |
 | 8 | Version history snapshots and time travel rollback | Slice 4 | planned |
@@ -81,10 +81,20 @@ spec [0003](../specs/0003-design-system-and-ui-foundation/index.md) · code in `
 
 ## Slice 1: Core generation loop and live preview
 
-### 5. Core generation loop and live preview · needs a decision
+### 5. Core generation loop and live preview
 Connect the full path end to end: user types a prompt, the planner breaks it down, the code generator writes the full stack files, a client side sandbox executes them, and the live preview boots beside the chat.
 **Done when:** a creator can enter a prompt, watch code generate in real time, view the booted application in the preview frame under one minute, and verify basic interactions work.
-- [ ] Design it (spec): `/architect core generation loop & live preview`
+spec [0004](../specs/0004-core-generation-loop-and-live-preview/index.md) · code in `apps/web`, `packages/sandbox`, `packages/shared`
+- [x] Design it (spec): `/architect core generation loop & live preview`
+- [x] Build it: `/develop core generation loop & live preview`
+  - [x] Cross origin isolation headers, shared bridge message contracts, and starter template bundle (AC-3, AC-4, AC-7, AC-8)
+  - [x] In browser WebContainer runtime boot, incremental file synchronization, and runner iframe bridge (AC-3, AC-4, AC-7, AC-8)
+  - [x] Server side generation route with key decryption, AI SDK two stage streaming, and snapshot persistence (AC-1, AC-2, AC-9)
+  - [x] Workbench generation UI components, client streaming hook, diff viewer, and preview error banner (AC-5, AC-6, AC-8)
+- [x] Verify it: `/check verify core generation loop & live preview`
+- [x] Test it: `/test core generation loop & live preview`
+- [x] Review it (fresh model): `/check review core generation loop & live preview`
+- [x] Document it: `/document core generation loop & live preview`
 (basis: tracer bullets prove the full integration pipe through every layer from day one)
 
 ## Slice 2: Visual canvas inspector and direct styling

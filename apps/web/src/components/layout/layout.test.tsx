@@ -135,4 +135,24 @@ describe("Layout Components", () => {
     expect(screen.queryByLabelText("Expand chat panel (Cmd+B)")).not.toBeInTheDocument();
     expect(screen.getAllByText("Prompt Assistant").length).toBeGreaterThan(0);
   });
+
+  // covers: AC-5
+  it("renders desktop panels with explicit identifiers and percentage sizes", () => {
+    const { container } = render(
+      <BuilderWorkbench
+        chatContent={
+          <ChatPanel title="Chat">
+            <p>Content</p>
+          </ChatPanel>
+        }
+        previewContent={<div>Preview</div>}
+      />
+    );
+
+    const chatPanel = container.querySelector("#chat-panel");
+    const previewPanel = container.querySelector("#preview-panel");
+
+    expect(chatPanel).toBeInTheDocument();
+    expect(previewPanel).toBeInTheDocument();
+  });
 });

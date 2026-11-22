@@ -1,3 +1,4 @@
+export { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 export * from "./client";
 export * from "./crypto";
 export * from "./errors";

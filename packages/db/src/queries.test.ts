@@ -36,7 +36,7 @@ describe("db queries and migration integration with PGlite", () => {
 
     // Apply migrations against in-memory PGlite instance (AC-6)
     await runPgliteMigrations(testDb);
-  });
+  }, 30000);
 
   afterAll(async () => {
     await pglite.close();

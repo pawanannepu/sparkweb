@@ -19,8 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Responsive mobile workbench layout with persistent bottom switcher bar for screen viewports under 768px (see spec 0003)
 - Live preview container with isolated iframe sandbox attributes, device viewport presets for desktop, tablet, and mobile with auto scale down, and URL address navigation bar (see spec 0003)
 - Typed cross context postMessage bridge connecting host builder window and sandbox iframe with origin verification and handshake message buffering (see spec 0003)
+- Server generation route streaming task milestones, tool calls, and file operations over Server Sent Events (see spec 0004)
+- In browser WebContainer runtime runner mounting virtual file trees and executing client side Vite preview with WebAssembly PGlite database (see spec 0004)
+- Incremental file synchronization writing modified files into the active WebContainer file system via typed bridge messages to trigger Vite hot module replacement (see spec 0004)
+- Prompt composer component with model selection dropdown supporting Anthropic Claude, OpenAI GPT-4o, and Google Gemini models (see spec 0004)
+- Generation progress card displaying real time task planning milestones, active file status badges, and expandable code diff previews (see spec 0004)
+- Client generation loop hook orchestrating streaming event consumption, local diff tracking, and user abort cancellation (see spec 0004)
+- Preview compilation error banner capturing compiler diagnostics and runtime errors from the runner iframe (see spec 0004)
+- Automated snapshot persistence computing SHA 256 tree hashes and recording immutable turn checkpoints to PostgreSQL upon stream completion (see spec 0004)
+
+### Changed
+- Builder workbench default preview target points to the active WebContainer sandbox runner route (see spec 0004)
 
 ### Security
 - Encrypted storage for personal provider credentials at rest with authentication tag tamper verification (see spec 0002)
 - Domain level teardown protection preventing deletion of snapshots backing active live deployments (see spec 0002)
 - Dedicated origin isolation and restricted iframe sandbox flags preventing untrusted preview applications from accessing parent workspace state, cookies, or storage (see spec 0003)
+- Cross origin isolation headers across builder workbench and sandbox runner enabling WebAssembly SharedArrayBuffer execution (see spec 0004)
