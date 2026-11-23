@@ -27,12 +27,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Client generation loop hook orchestrating streaming event consumption, local diff tracking, and user abort cancellation (see spec 0004)
 - Preview compilation error banner capturing compiler diagnostics and runtime errors from the runner iframe (see spec 0004)
 - Automated snapshot persistence computing SHA 256 tree hashes and recording immutable turn checkpoints to PostgreSQL upon stream completion (see spec 0004)
+- Visual canvas inspector mode toggle in preview toolbar activating hover bounding box outlines and pixel dimensions inside the live preview (see spec 0005)
+- In app canvas overlay client script with click selection, hover outlines, and data source location attribute detection (see spec 0005)
+- Right docked visual inspector panel providing visual controls for text content, typography, spacing, background colors, and borders (see spec 0005)
+- In browser AST modifier using recast and tailwind-merge to update JSX Tailwind utility classes while preserving formatting, indentation, and comments (see spec 0005)
+- Direct inline content editable text editing for static leaf JSX text nodes with instant preview updates and Enter key commit (see spec 0005)
+- In memory undo and redo history stack supporting Command+Z and Command+Shift+Z keyboard shortcuts for visual adjustments (see spec 0005)
+- Automated snapshot persistence endpoint committing full project file maps to PostgreSQL after three seconds of user inactivity with parent snapshot lineage tracking (see spec 0005)
 
 ### Changed
 - Builder workbench default preview target points to the active WebContainer sandbox runner route (see spec 0004)
+- Preview toolbar and builder workbench accommodate right docked inspector panel with responsive layout and mobile tab integration (see spec 0005)
+- Sandbox starter template bundles custom Vite inspector plugin and client runtime script for source location tagging (see spec 0005)
 
 ### Security
 - Encrypted storage for personal provider credentials at rest with authentication tag tamper verification (see spec 0002)
 - Domain level teardown protection preventing deletion of snapshots backing active live deployments (see spec 0002)
 - Dedicated origin isolation and restricted iframe sandbox flags preventing untrusted preview applications from accessing parent workspace state, cookies, or storage (see spec 0003)
 - Cross origin isolation headers across builder workbench and sandbox runner enabling WebAssembly SharedArrayBuffer execution (see spec 0004)
+- Workspace source boundary enforcement in client AST modifier rejecting modifications to external node_modules or path traversal attempts (see spec 0005)
+- Read only warning badges and disabled editing controls for unmapped or third party components (see spec 0005)

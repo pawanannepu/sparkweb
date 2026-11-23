@@ -13,6 +13,14 @@ describe("sandbox starter template and file tree utilities", () => {
     expect(STARTER_TEMPLATE_FILES["index.html"]).toBeDefined();
     expect(STARTER_TEMPLATE_FILES["src/App.tsx"]).toBeDefined();
     expect(STARTER_TEMPLATE_FILES["src/main.tsx"]).toBeDefined();
+    expect(STARTER_TEMPLATE_FILES["plugins/spark-inspector.js"]).toBeDefined();
+    expect(STARTER_TEMPLATE_FILES["src/spark-inspector-client.ts"]).toBeDefined();
+  });
+
+  it("registers spark-inspector plugin in vite.config.ts", () => {
+    const viteConfig = STARTER_TEMPLATE_FILES["vite.config.ts"]?.content;
+    expect(viteConfig).toContain("sparkInspector");
+    expect(viteConfig).toContain("plugins/spark-inspector.js");
   });
 
   it("filters out node_modules and build cache files correctly", () => {

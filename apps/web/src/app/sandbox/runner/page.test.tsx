@@ -42,4 +42,16 @@ describe("SandboxRunnerPage", () => {
     expect(screen.getByText("Initializing preview environment...")).toBeInTheDocument();
     expect(screen.getByText("Vite dev server starting in browser WebAssembly")).toBeInTheDocument();
   });
+
+  // covers: AC-1, AC-3
+  it("subscribes to window message events for host bridge communication", () => {
+    // Arrange
+    const addEventListenerSpy = vi.spyOn(window, "addEventListener");
+
+    // Act
+    render(<SandboxRunnerPage />);
+
+    // Assert
+    expect(addEventListenerSpy).toHaveBeenCalledWith("message", expect.any(Function));
+  });
 });

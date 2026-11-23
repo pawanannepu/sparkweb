@@ -65,28 +65,55 @@ export default function SandboxRunnerPage() {
 
       const msg = data as BridgeMessage;
 
-      if (msg.type === "PREVIEW_BOOT") {
-        try {
-          const payload = msg.payload as unknown as PreviewBootPayload;
-          await runner.boot(payload?.files);
-        } catch (err: unknown) {
-          console.error("Runner boot error:", err);
-        }
-      } else if (msg.type === "PREVIEW_WRITE_FILES") {
-        try {
-          const payload = msg.payload as unknown as PreviewWriteFilesPayload;
-          if (payload?.files && payload.files.length > 0) {
-            await runner.applyFileUpdates(payload.files);
+      // Check if message came from parent host
+      const isFromParent = event.source === window.parent;
+
+      if (isFromParent) {
+        if (msg.type === "PREVIEW_BOOT") {
+          try {
+            const payload = msg.payload as unknown as PreviewBootPayload;
+            await runner.boot(payload?.files);
+          } catch (err: unknown) {
+            console.error("Runner boot error:", err);
           }
-        } catch (err: unknown) {
-          console.error("Failed to write files to sandbox:", err);
-        }
-      } else if (msg.type === "PREVIEW_RELOAD") {
-        if (previewUrl) {
-          // Trigger reload of internal application frame
+        } else if (msg.type === "PREVIEW_WRITE_FILES") {
+          try {
+            const payload = msg.payload as unknown as PreviewWriteFilesPayload;
+            if (payload?.files && payload.files.length > 0) {
+              await runner.applyFileUpdates(payload.files);
+            }
+          } catch (err: unknown) {
+            console.error("Failed to write files to sandbox:", err);
+          }
+        } else if (msg.type === "PREVIEW_RELOAD") {
+          if (previewUrl) {
+            const iframe = document.getElementById("sandbox-app-frame") as HTMLIFrameElement;
+            if (iframe) {
+              iframe.src = previewUrl;
+            }
+          }
+        } else if (
+          msg.type === "PREVIEW_INSPECT_MODE" ||
+          msg.type === "PREVIEW_INJECT_STYLES" ||
+          msg.type === "PREVIEW_UPDATE_TEXT"
+        ) {
+          // Forward inspector commands from host down to application iframe
           const iframe = document.getElementById("sandbox-app-frame") as HTMLIFrameElement;
-          if (iframe) {
-            iframe.src = previewUrl;
+          if (iframe?.contentWindow) {
+            iframe.contentWindow.postMessage(msg, "*");
+          }
+        }
+      } else {
+        // Message originated from inner application iframe -> forward upstream to parent host
+        if (
+          msg.type === "PREVIEW_ELEMENT_HOVER" ||
+          msg.type === "PREVIEW_ELEMENT_SELECT" ||
+          msg.type === "PREVIEW_UPDATE_TEXT" ||
+          msg.type === "PREVIEW_HMR_COMPLETE" ||
+          msg.type === "PREVIEW_NAVIGATE"
+        ) {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage(msg, "*");
           }
         }
       }

@@ -1,13 +1,21 @@
 "use client";
 
-import type { DeviceMode, PreviewErrorPayload, ProjectFile } from "@spark/shared";
+import { STARTER_TEMPLATE_FILES } from "@spark/sandbox";
+import type {
+  BridgeMessageType,
+  DeviceMode,
+  PreviewErrorPayload,
+  ProjectFile,
+  SelectedElementState,
+} from "@spark/shared";
 import { Sparkles } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   GenerationProgressCard,
   PreviewErrorBanner,
   PromptComposer,
 } from "@/components/generation";
+import { InspectorPanel } from "@/components/inspector";
 import {
   BuilderShell,
   BuilderWorkbench,
@@ -18,6 +26,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { useGenerationLoop } from "@/hooks/useGenerationLoop";
 import { usePreviewBridge } from "@/hooks/usePreviewBridge";
+import { useProjectFiles } from "@/hooks/useProjectFiles";
 
 export default function BuilderPage() {
   const [projectId] = useState("00000000-0000-0000-0000-000000000001");
@@ -47,6 +56,14 @@ export default function BuilderPage() {
       } else if (msg.type === "PREVIEW_ERROR") {
         const errorData = msg.payload as unknown as PreviewErrorPayload;
         setPreviewError(errorData);
+      } else if (msg.type === "PREVIEW_ELEMENT_SELECT") {
+        const element = msg.payload as unknown as SelectedElementState;
+        setSelectedElement(element);
+      } else if (msg.type === "PREVIEW_UPDATE_TEXT") {
+        const payload = msg.payload as { text?: string };
+        if (payload?.text) {
+          applyTextUpdate(payload.text);
+        }
       }
     },
   });
@@ -58,6 +75,7 @@ export default function BuilderPage() {
         // Forward streamed file modification to in-browser WebContainer immediately
         sendToPreview("PREVIEW_WRITE_FILES", { files: [file] });
         setPreviewError(null);
+        updateFileContent(file.path, file.content, "AI streaming generation");
       },
       onFinish: (snapshotId: string, _treeHash: string) => {
         setMessages((prev) => [
@@ -81,6 +99,59 @@ export default function BuilderPage() {
       },
     });
 
+  const {
+    selectedElement,
+    setSelectedElement,
+    isInspectMode,
+    setIsInspectMode,
+    applyStyleUpdate,
+    applyTextUpdate,
+    updateFileContent,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+  } = useProjectFiles({
+    projectId,
+    initialFiles: STARTER_TEMPLATE_FILES,
+    isStreaming,
+    onWriteFiles: (filesToWrite) => {
+      sendToPreview("PREVIEW_WRITE_FILES", { files: filesToWrite });
+    },
+    onSendBridgeMessage: (type, payload) => {
+      sendToPreview(type as BridgeMessageType, payload);
+    },
+  });
+
+  // Global Keyboard shortcuts: Command+Z (Undo) and Command+Shift+Z (Redo) (AC-8)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+        const active = document.activeElement;
+        const isTextInput =
+          active &&
+          (active.tagName === "INPUT" ||
+            active.tagName === "TEXTAREA" ||
+            (active as HTMLElement).isContentEditable);
+
+        // Allow shortcuts unless typing in prompt composer
+        if (isTextInput && !active.closest("[aria-label='Visual Canvas Inspector Panel']")) {
+          return;
+        }
+
+        e.preventDefault();
+        if (e.shiftKey) {
+          if (canRedo) redo();
+        } else {
+          if (canUndo) undo();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [canUndo, canRedo, undo, redo]);
+
   const handlePromptSubmit = async (promptText: string, model: string) => {
     setMessages((prev) => [...prev, { id: String(Date.now()), role: "user", content: promptText }]);
     await submitPrompt(promptText, model);
@@ -98,9 +169,30 @@ export default function BuilderPage() {
     sendToPreview("PREVIEW_NAVIGATE", { path: newPath });
   };
 
+  const handleToggleInspect = () => {
+    setIsInspectMode(!isInspectMode);
+  };
+
   return (
     <BuilderShell projectName="Demo Application">
       <BuilderWorkbench
+        isInspectorOpen={isInspectMode || Boolean(selectedElement)}
+        onToggleInspector={handleToggleInspect}
+        inspectorContent={
+          <InspectorPanel
+            element={selectedElement}
+            onClose={() => {
+              setSelectedElement(null);
+              setIsInspectMode(false);
+            }}
+            onApplyStyle={applyStyleUpdate}
+            onApplyText={applyTextUpdate}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={undo}
+            onRedo={redo}
+          />
+        }
         chatContent={
           <ChatPanel title="Prompt Assistant">
             <div className="flex h-full flex-col justify-between space-y-4">
@@ -189,6 +281,8 @@ export default function BuilderPage() {
               onNavigate={handleNavigate}
               isConnected={isConnected}
               sandboxUrl={sandboxUrl}
+              isInspectMode={isInspectMode}
+              onToggleInspect={handleToggleInspect}
             />
 
             {previewError && (

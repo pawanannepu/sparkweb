@@ -39,6 +39,45 @@ export interface WorkspaceLayoutPreferences {
   updatedAt: string;
 }
 
+export interface ElementRect {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
+export interface ElementSourceLocation {
+  file: string;
+  line: number;
+  column: number;
+  componentName?: string;
+}
+
+export interface SelectedElementState {
+  selector: string;
+  tagName: string;
+  source?: ElementSourceLocation;
+  classes: string[];
+  styles: Record<string, string>;
+  textContent: string;
+  rect: ElementRect;
+  isEditable: boolean;
+  isLeafTextOnly: boolean;
+}
+
+export interface CanvasHistoryEntry {
+  id: string;
+  timestamp: number;
+  files: Record<string, string>;
+  description: string;
+}
+
+export interface CanvasHistoryStack {
+  past: CanvasHistoryEntry[];
+  present: Record<string, string>;
+  future: CanvasHistoryEntry[];
+}
+
 export type BridgeMessageType =
   | "PREVIEW_BOOT"
   | "PREVIEW_WRITE_FILES"
@@ -47,7 +86,13 @@ export type BridgeMessageType =
   | "PREVIEW_RELOAD"
   | "PREVIEW_ERROR"
   | "PREVIEW_RESIZE"
-  | "PREVIEW_HEARTBEAT";
+  | "PREVIEW_HEARTBEAT"
+  | "PREVIEW_INSPECT_MODE"
+  | "PREVIEW_ELEMENT_HOVER"
+  | "PREVIEW_ELEMENT_SELECT"
+  | "PREVIEW_INJECT_STYLES"
+  | "PREVIEW_UPDATE_TEXT"
+  | "PREVIEW_HMR_COMPLETE";
 
 export interface PreviewErrorPayload {
   message: string;
@@ -63,6 +108,42 @@ export interface PreviewBootPayload {
 
 export interface PreviewWriteFilesPayload {
   files: ProjectFile[];
+}
+
+export interface PreviewInspectModePayload {
+  enabled: boolean;
+}
+
+export interface PreviewElementHoverPayload {
+  rect: ElementRect;
+  tagName: string;
+  classes: string[];
+}
+
+export interface PreviewElementSelectPayload {
+  selector: string;
+  tagName: string;
+  rect: ElementRect;
+  source?: ElementSourceLocation;
+  classes: string[];
+  styles: Record<string, string>;
+  textContent: string;
+  isEditable: boolean;
+  isLeafTextOnly: boolean;
+}
+
+export interface PreviewInjectStylesPayload {
+  selector: string;
+  styles: Record<string, string>;
+}
+
+export interface PreviewUpdateTextPayload {
+  selector: string;
+  text: string;
+}
+
+export interface PreviewHmrCompletePayload {
+  timestamp: number;
 }
 
 export interface BridgeMessage {

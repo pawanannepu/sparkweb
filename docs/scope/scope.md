@@ -16,7 +16,7 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 | 3 | Data model | Foundation | in-progress |
 | 4 | Design system and UI foundation | Foundation | in-progress |
 | 5 | Core generation loop and live preview | Slice 1 | in-progress |
-| 6 | Visual canvas inspector and direct styling | Slice 2 | planned |
+| 6 | Visual canvas inspector and direct styling | Slice 2 | in-progress |
 | 7 | Self healing verification engine | Slice 3 | planned |
 | 8 | Version history snapshots and time travel rollback | Slice 4 | planned |
 | 9 | Managed database viewer and client data tools | Slice 5 | planned |
@@ -99,10 +99,21 @@ spec [0004](../specs/0004-core-generation-loop-and-live-preview/index.md) · cod
 
 ## Slice 2: Visual canvas inspector and direct styling
 
-### 6. Visual canvas inspector and direct styling · needs a decision
+### 6. Visual canvas inspector and direct styling
 Enable point and click selection of any element inside the live preview to inspect its properties, describe adjustments in natural language, or edit text, colors, and layout directly with visual controls.
 **Done when:** clicking an element highlights its corresponding code boundary, visual controls apply updates instantly, and changes synchronize cleanly into the project code tree.
-- [ ] Design it (spec): `/architect visual canvas inspector & direct styling`
+spec [0005](../specs/0005-visual-canvas-inspector-and-direct-styling/index.md) · code in `apps/web/src/components/inspector`, `apps/web/src/hooks`, `packages/sandbox`
+- [x] Design it (spec): `/architect visual canvas inspector & direct styling`
+- [x] Build it: `/develop visual canvas inspector & direct styling`
+  - [x] Shared bridge message contracts and Vite inspector plugin (AC-1, AC-2, AC-3)
+  - [x] In app canvas inspector overlay client script and DOM listeners (AC-1, AC-2, AC-3, AC-6)
+  - [x] Client project file store and AST modifier with recast and tailwind-merge (AC-5, AC-6, AC-7)
+  - [x] Right docked visual inspector panel and style controls (AC-4, AC-5, AC-7)
+  - [x] Dedicated snapshot persistence API route, concurrency lock, and client history stack (AC-8)
+- [x] Verify it: `/check verify visual canvas inspector & direct styling`
+- [x] Test it: `/test visual canvas inspector & direct styling`
+- [x] Review it (fresh model): `/check review visual canvas inspector & direct styling`
+- [x] Document it: `/document visual canvas inspector & direct styling`
 (basis: visual point and click editing lets creators polish applications without manual prompt round trips)
 
 ## Slice 3: Self healing verification engine

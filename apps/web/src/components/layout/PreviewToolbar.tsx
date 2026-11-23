@@ -1,12 +1,20 @@
 "use client";
 
 import type { DeviceMode } from "@spark/shared";
-import { ExternalLink, Monitor, RotateCw, Smartphone, Tablet } from "lucide-react";
+import {
+  ExternalLink,
+  Monitor,
+  MousePointerClick,
+  RotateCw,
+  Smartphone,
+  Tablet,
+} from "lucide-react";
 import * as React from "react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 export interface PreviewToolbarProps {
   activeDevice: DeviceMode;
@@ -16,6 +24,8 @@ export interface PreviewToolbarProps {
   onNavigate?: (path: string) => void;
   isConnected?: boolean;
   sandboxUrl?: string;
+  isInspectMode?: boolean;
+  onToggleInspect?: () => void;
 }
 
 export function PreviewToolbar({
@@ -26,6 +36,8 @@ export function PreviewToolbar({
   onNavigate,
   isConnected = false,
   sandboxUrl,
+  isInspectMode = false,
+  onToggleInspect,
 }: PreviewToolbarProps) {
   const [inputPath, setInputPath] = useState(currentPath);
 
@@ -124,6 +136,32 @@ export function PreviewToolbar({
 
         {/* Action Buttons */}
         <div className="flex items-center gap-1">
+          {/* Canvas Inspector Toggle (AC-1) */}
+          {onToggleInspect && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={isInspectMode ? "secondary" : "ghost"}
+                  size="icon"
+                  className={cn(
+                    "h-7 w-7 transition-colors",
+                    isInspectMode && "bg-indigo-600 text-white hover:bg-indigo-500 hover:text-white"
+                  )}
+                  onClick={onToggleInspect}
+                  aria-label={
+                    isInspectMode ? "Exit canvas inspect mode" : "Enable canvas inspect mode"
+                  }
+                  aria-pressed={isInspectMode}
+                >
+                  <MousePointerClick className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {isInspectMode ? "Exit inspect mode" : "Inspect canvas element"}
+              </TooltipContent>
+            </Tooltip>
+          )}
+
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

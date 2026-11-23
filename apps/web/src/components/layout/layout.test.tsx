@@ -4,10 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import { BuilderShell, BuilderWorkbench, ChatPanel, PreviewFrame, PreviewToolbar } from "./index";
 
 describe("Layout Components", () => {
-  it("renders PreviewToolbar and handles device changes and address navigation", async () => {
+  it("renders PreviewToolbar and handles device changes, reload, and inspect toggle", async () => {
     const handleDeviceChange = vi.fn();
     const handleReload = vi.fn();
     const handleNavigate = vi.fn();
+    const handleToggleInspect = vi.fn();
 
     render(
       <PreviewToolbar
@@ -18,10 +19,17 @@ describe("Layout Components", () => {
         currentPath="/users"
         isConnected={true}
         sandboxUrl="http://127.0.0.1:3000/sandbox"
+        isInspectMode={false}
+        onToggleInspect={handleToggleInspect}
       />
     );
 
     expect(screen.getByLabelText("Connected")).toBeInTheDocument();
+
+    // Inspect toggle button
+    const inspectBtn = screen.getByLabelText("Enable canvas inspect mode");
+    await userEvent.click(inspectBtn);
+    expect(handleToggleInspect).toHaveBeenCalledTimes(1);
 
     // Click Mobile preset button
     const mobileBtn = screen.getByLabelText("Mobile viewport");
@@ -136,8 +144,8 @@ describe("Layout Components", () => {
     expect(screen.getAllByText("Prompt Assistant").length).toBeGreaterThan(0);
   });
 
-  // covers: AC-5
-  it("renders desktop panels with explicit identifiers and percentage sizes", () => {
+  // covers: AC-4, AC-5
+  it("renders desktop panels including inspector panel when open", () => {
     const { container } = render(
       <BuilderWorkbench
         chatContent={
@@ -146,13 +154,18 @@ describe("Layout Components", () => {
           </ChatPanel>
         }
         previewContent={<div>Preview</div>}
+        inspectorContent={<div>Inspector Controls</div>}
+        isInspectorOpen={true}
       />
     );
 
     const chatPanel = container.querySelector("#chat-panel");
     const previewPanel = container.querySelector("#preview-panel");
+    const inspectorPanel = container.querySelector("#inspector-panel");
 
     expect(chatPanel).toBeInTheDocument();
     expect(previewPanel).toBeInTheDocument();
+    expect(inspectorPanel).toBeInTheDocument();
+    expect(screen.getAllByText("Inspector Controls").length).toBeGreaterThan(0);
   });
 });

@@ -36,12 +36,77 @@ export const STARTER_TEMPLATE_FILES: SnapshotFilesMap = {
       2
     ),
   },
+  "plugins/spark-inspector.js": {
+    content: `export default function sparkInspector() {
+  return {
+    name: "vite-plugin-spark-inspector",
+    transform(code, id) {
+      if (!id.match(/\\.[jt]sx$/) || id.includes("node_modules") || id.includes("spark-inspector-client")) {
+        return null;
+      }
+      const cleanPath = id.replace(/^[./]+/, "").split("?")[0];
+      let line = 1;
+      let col = 1;
+      let inString = false;
+      let stringChar = "";
+      let inComment = false;
+      let result = "";
+
+      for (let i = 0; i < code.length; i++) {
+        const ch = code[i];
+        const next = code[i + 1] || "";
+
+        if (ch === "\\n") {
+          line++;
+          col = 1;
+        } else {
+          col++;
+        }
+
+        if (!inString && !inComment) {
+          if (ch === "/" && next === "/") {
+            inComment = true;
+          } else if (ch === '"' || ch === "'" || ch === "\`") {
+            inString = true;
+            stringChar = ch;
+          } else if (ch === "<" && /[a-zA-Z]/.test(next)) {
+            const match = code.slice(i).match(/^<([a-zA-Z][a-zA-Z0-9_.-]*)/);
+            if (match) {
+              const tagName = match[1];
+              const tagLen = match[0].length;
+              const locAttr = \` data-source-loc="\${cleanPath}:\${line}:\${col}"\`;
+              result += \`<\${tagName}\${locAttr}\`;
+              i += tagLen - 1;
+              col += tagLen - 1;
+              continue;
+            }
+          }
+        } else if (inString) {
+          if (ch === stringChar && code[i - 1] !== "\\\\") {
+            inString = false;
+          }
+        } else if (inComment) {
+          if (ch === "\\n") {
+            inComment = false;
+          }
+        }
+
+        result += ch;
+      }
+
+      return { code: result, map: null };
+    },
+  };
+}
+`,
+  },
   "vite.config.ts": {
     content: `import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import sparkInspector from "./plugins/spark-inspector.js";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), sparkInspector()],
   server: {
     host: true,
     port: 5173,
@@ -64,11 +129,319 @@ export default defineConfig({
 </html>
 `,
   },
+  "src/spark-inspector-client.ts": {
+    content: `// In-app DOM canvas inspector client script
+let isInspectActive = false;
+let hoveredElement: HTMLElement | null = null;
+let selectedElement: HTMLElement | null = null;
+let overlayContainer: HTMLDivElement | null = null;
+let hoverBox: HTMLDivElement | null = null;
+let hoverBadge: HTMLDivElement | null = null;
+let selectBox: HTMLDivElement | null = null;
+
+function postToParent(type: string, payload: Record<string, unknown> = {}) {
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage(
+      {
+        protocol: "sparkweb:bridge:v1",
+        type,
+        source: "sparkweb:sandbox",
+        payload,
+        timestamp: Date.now(),
+      },
+      "*"
+    );
+  }
+}
+
+function ensureOverlays() {
+  if (overlayContainer) return;
+  overlayContainer = document.createElement("div");
+  overlayContainer.id = "spark-inspector-overlay";
+  overlayContainer.style.position = "fixed";
+  overlayContainer.style.inset = "0";
+  overlayContainer.style.pointerEvents = "none";
+  overlayContainer.style.zIndex = "2147483647";
+  overlayContainer.style.overflow = "visible";
+
+  // Hover bounding box
+  hoverBox = document.createElement("div");
+  hoverBox.style.position = "absolute";
+  hoverBox.style.pointerEvents = "none";
+  hoverBox.style.border = "1.5px dashed #6366f1";
+  hoverBox.style.backgroundColor = "rgba(99, 102, 241, 0.08)";
+  hoverBox.style.display = "none";
+  hoverBox.style.transition = "all 0.08s ease-out";
+  hoverBox.style.boxSizing = "border-box";
+
+  // Hover info badge
+  hoverBadge = document.createElement("div");
+  hoverBadge.style.position = "absolute";
+  hoverBadge.style.top = "-24px";
+  hoverBadge.style.left = "0";
+  hoverBadge.style.backgroundColor = "#4f46e5";
+  hoverBadge.style.color = "#ffffff";
+  hoverBadge.style.fontSize = "10px";
+  hoverBadge.style.fontWeight = "600";
+  hoverBadge.style.fontFamily = "ui-monospace, monospace";
+  hoverBadge.style.padding = "2px 6px";
+  hoverBadge.style.borderRadius = "4px";
+  hoverBadge.style.whiteSpace = "nowrap";
+  hoverBadge.style.boxShadow = "0 2px 4px rgba(0,0,0,0.3)";
+  hoverBox.appendChild(hoverBadge);
+
+  // Selection bounding box
+  selectBox = document.createElement("div");
+  selectBox.style.position = "absolute";
+  selectBox.style.pointerEvents = "none";
+  selectBox.style.border = "2px solid #818cf8";
+  selectBox.style.backgroundColor = "rgba(129, 140, 248, 0.12)";
+  selectBox.style.display = "none";
+  selectBox.style.boxSizing = "border-box";
+
+  overlayContainer.appendChild(hoverBox);
+  overlayContainer.appendChild(selectBox);
+  document.body.appendChild(overlayContainer);
+}
+
+function updateElementOverlay(el: HTMLElement | null, box: HTMLDivElement | null, badge?: HTMLDivElement | null) {
+  if (!el || !box) {
+    if (box) box.style.display = "none";
+    return;
+  }
+  const rect = el.getBoundingClientRect();
+  box.style.display = "block";
+  box.style.top = \`\${rect.top}px\`;
+  box.style.left = \`\${rect.left}px\`;
+  box.style.width = \`\${rect.width}px\`;
+  box.style.height = \`\${rect.height}px\`;
+
+  if (badge) {
+    const tagName = el.tagName.toLowerCase();
+    const classPreview = el.className && typeof el.className === "string" ? \` .\${el.className.split(" ")[0]}\` : "";
+    badge.textContent = \`<\${tagName}\${classPreview}> \${Math.round(rect.width)} × \${Math.round(rect.height)}\`;
+  }
+}
+
+function getRelevantStyles(el: HTMLElement): Record<string, string> {
+  const cs = window.getComputedStyle(el);
+  return {
+    backgroundColor: cs.backgroundColor,
+    color: cs.color,
+    fontSize: cs.fontSize,
+    fontWeight: cs.fontWeight,
+    textAlign: cs.textAlign,
+    lineHeight: cs.lineHeight,
+    paddingTop: cs.paddingTop,
+    paddingRight: cs.paddingRight,
+    paddingBottom: cs.paddingBottom,
+    paddingLeft: cs.paddingLeft,
+    marginTop: cs.marginTop,
+    marginRight: cs.marginRight,
+    marginBottom: cs.marginBottom,
+    marginLeft: cs.marginLeft,
+    display: cs.display,
+    flexDirection: cs.flexDirection,
+    justifyContent: cs.justifyContent,
+    alignItems: cs.alignItems,
+    borderRadius: cs.borderRadius,
+    borderWidth: cs.borderWidth,
+    borderColor: cs.borderColor,
+    gap: cs.gap,
+  };
+}
+
+function parseSourceLoc(el: HTMLElement) {
+  const raw = el.getAttribute("data-source-loc");
+  if (!raw) return undefined;
+  const parts = raw.split(":");
+  if (parts.length >= 3) {
+    return {
+      file: parts[0] || "",
+      line: parseInt(parts[1] || "1", 10),
+      column: parseInt(parts[2] || "1", 10),
+    };
+  }
+  return undefined;
+}
+
+function isLeafTextNode(el: HTMLElement): boolean {
+  if (el.children.length > 0) return false;
+  return Boolean(el.textContent && el.textContent.trim().length > 0);
+}
+
+function handleMouseMove(e: MouseEvent) {
+  if (!isInspectActive) return;
+  const target = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+  if (!target || target === document.body || target === document.documentElement || overlayContainer?.contains(target)) {
+    hoveredElement = null;
+    updateElementOverlay(null, hoverBox, hoverBadge);
+    return;
+  }
+
+  hoveredElement = target;
+  updateElementOverlay(target, hoverBox, hoverBadge);
+
+  const rect = target.getBoundingClientRect();
+  postToParent("PREVIEW_ELEMENT_HOVER", {
+    rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
+    tagName: target.tagName.toLowerCase(),
+    classes: typeof target.className === "string" ? target.className.split(/\\s+/).filter(Boolean) : [],
+  });
+}
+
+function handleClick(e: MouseEvent) {
+  if (!isInspectActive) return;
+  e.preventDefault();
+  e.stopPropagation();
+
+  const target = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+  if (!target || target === document.body || overlayContainer?.contains(target)) return;
+
+  selectedElement = target;
+  updateElementOverlay(target, selectBox);
+
+  const rect = target.getBoundingClientRect();
+  const source = parseSourceLoc(target);
+  const classes = typeof target.className === "string" ? target.className.split(/\\s+/).filter(Boolean) : [];
+  const styles = getRelevantStyles(target);
+  const isLeaf = isLeafTextNode(target);
+  const isEditable = Boolean(source?.file?.startsWith("src/"));
+  const selector = target.getAttribute("data-source-loc")
+    ? \`[data-source-loc="\${target.getAttribute("data-source-loc")}"]\`
+    : target.id
+      ? \`#\${target.id}\`
+      : target.tagName.toLowerCase();
+
+  postToParent("PREVIEW_ELEMENT_SELECT", {
+    selector,
+    tagName: target.tagName.toLowerCase(),
+    rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
+    source,
+    classes,
+    styles,
+    textContent: target.textContent || "",
+    isEditable,
+    isLeafTextOnly: isLeaf,
+  });
+}
+
+function handleDblClick(e: MouseEvent) {
+  if (!isInspectActive) return;
+  const target = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+  if (!target || !isLeafTextNode(target)) return;
+
+  const source = parseSourceLoc(target);
+  if (!source?.file?.startsWith("src/")) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  target.contentEditable = "true";
+  target.focus();
+
+  const commit = () => {
+    target.contentEditable = "false";
+    const text = target.textContent || "";
+    const selector = target.getAttribute("data-source-loc")
+      ? \`[data-source-loc="\${target.getAttribute("data-source-loc")}"]\`
+      : target.tagName.toLowerCase();
+
+    postToParent("PREVIEW_UPDATE_TEXT", {
+      selector,
+      text,
+    });
+  };
+
+  const onKeyDown = (ke: KeyboardEvent) => {
+    if (ke.key === "Enter" && !ke.shiftKey) {
+      ke.preventDefault();
+      target.blur();
+    }
+  };
+
+  target.addEventListener("blur", commit, { once: true });
+  target.addEventListener("keydown", onKeyDown);
+}
+
+function handleScrollOrResize() {
+  if (hoveredElement) updateElementOverlay(hoveredElement, hoverBox, hoverBadge);
+  if (selectedElement) updateElementOverlay(selectedElement, selectBox);
+}
+
+// Window Message Listener for Host Commands
+window.addEventListener("message", (event: MessageEvent) => {
+  const data = event.data;
+  if (!data || typeof data !== "object" || data.protocol !== "sparkweb:bridge:v1") return;
+
+  if (data.type === "PREVIEW_INSPECT_MODE") {
+    isInspectActive = Boolean(data.payload?.enabled);
+    ensureOverlays();
+    if (isInspectActive) {
+      window.addEventListener("mousemove", handleMouseMove, true);
+      window.addEventListener("click", handleClick, true);
+      window.addEventListener("dblclick", handleDblClick, true);
+      window.addEventListener("scroll", handleScrollOrResize, true);
+      window.addEventListener("resize", handleScrollOrResize);
+    } else {
+      window.removeEventListener("mousemove", handleMouseMove, true);
+      window.removeEventListener("click", handleClick, true);
+      window.removeEventListener("dblclick", handleDblClick, true);
+      window.removeEventListener("scroll", handleScrollOrResize, true);
+      window.removeEventListener("resize", handleScrollOrResize);
+      hoveredElement = null;
+      selectedElement = null;
+      if (hoverBox) hoverBox.style.display = "none";
+      if (selectBox) selectBox.style.display = "none";
+    }
+  } else if (data.type === "PREVIEW_INJECT_STYLES") {
+    const payload = data.payload as { selector?: string; styles?: Record<string, string> };
+    let el = selectedElement;
+    if (payload.selector && (!el || !el.matches(payload.selector))) {
+      el = document.querySelector(payload.selector) as HTMLElement | null;
+    }
+    if (el && payload.styles) {
+      el.setAttribute("data-spark-temp-style", "true");
+      for (const [k, v] of Object.entries(payload.styles)) {
+        (el.style as unknown as Record<string, string>)[k] = v;
+      }
+      updateElementOverlay(el, selectBox);
+    }
+  } else if (data.type === "PREVIEW_UPDATE_TEXT") {
+    const payload = data.payload as { selector?: string; text?: string };
+    let el = selectedElement;
+    if (payload.selector && (!el || !el.matches(payload.selector))) {
+      el = document.querySelector(payload.selector) as HTMLElement | null;
+    }
+    if (el && typeof payload.text === "string") {
+      el.textContent = payload.text;
+      updateElementOverlay(el, selectBox);
+    }
+  }
+});
+
+// Vite HMR Support
+// @ts-ignore
+if (import.meta && (import.meta as any).hot) {
+  // @ts-ignore
+  (import.meta as any).hot.on("vite:afterUpdate", () => {
+    document.querySelectorAll("[data-spark-temp-style]").forEach((el) => {
+      el.removeAttribute("data-spark-temp-style");
+    });
+    if (selectedElement) {
+      updateElementOverlay(selectedElement, selectBox);
+    }
+    postToParent("PREVIEW_HMR_COMPLETE", { timestamp: Date.now() });
+  });
+}
+`,
+  },
   "src/main.tsx": {
     content: `import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import "./spark-inspector-client";
 
 const rootElement = document.getElementById("root");
 if (rootElement) {

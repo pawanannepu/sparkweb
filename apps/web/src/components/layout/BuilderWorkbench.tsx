@@ -1,6 +1,6 @@
 "use client";
 
-import { Eye, MessageSquare, PanelLeftOpen } from "lucide-react";
+import { Eye, MessageSquare, PanelLeftOpen, Sliders } from "lucide-react";
 import * as React from "react";
 import { useEffect, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
@@ -11,17 +11,22 @@ import { cn } from "@/lib/utils";
 export interface BuilderWorkbenchProps {
   chatContent: React.ReactNode;
   previewContent: React.ReactNode;
+  inspectorContent?: React.ReactNode;
+  isInspectorOpen?: boolean;
+  onToggleInspector?: () => void;
   className?: string;
 }
 
 export function BuilderWorkbench({
   chatContent,
   previewContent,
+  inspectorContent,
+  isInspectorOpen = false,
   className,
 }: BuilderWorkbenchProps) {
   const { layout, updateSizes, toggleChatCollapse } = useWorkspaceLayout();
   const [isDragging, setIsDragging] = useState(false);
-  const [mobileTab, setMobileTab] = useState<"chat" | "preview">("chat");
+  const [mobileTab, setMobileTab] = useState<"chat" | "preview" | "inspector">("chat");
 
   // Keyboard shortcut listener: Cmd+B or Ctrl+B toggles chat panel
   useEffect(() => {
@@ -44,6 +49,15 @@ export function BuilderWorkbench({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [toggleChatCollapse]);
+
+  // When inspector opens, switch to inspector tab on mobile
+  useEffect(() => {
+    if (isInspectorOpen && inspectorContent) {
+      setMobileTab("inspector");
+    }
+  }, [isInspectorOpen, inspectorContent]);
+
+  const showInspector = Boolean(isInspectorOpen && inspectorContent);
 
   return (
     <div className={cn("relative flex h-[calc(100vh-3.5rem)] w-full overflow-hidden", className)}>
@@ -74,7 +88,7 @@ export function BuilderWorkbench({
                 : [layoutMap["chat-panel"], layoutMap["preview-panel"]].filter(
                     (v): v is number => typeof v === "number"
                   );
-              if (values.length === 2) {
+              if (values.length >= 2) {
                 updateSizes(values[0], values[1]);
               }
             }
@@ -86,9 +100,9 @@ export function BuilderWorkbench({
             <>
               <Panel
                 id="chat-panel"
-                defaultSize={`${layout.chatPanelSize}%`}
+                defaultSize={`${showInspector ? Math.min(layout.chatPanelSize, 25) : layout.chatPanelSize}%`}
                 minSize="15%"
-                maxSize="50%"
+                maxSize="45%"
                 className="h-full overflow-hidden"
               >
                 {React.isValidElement(chatContent)
@@ -112,11 +126,19 @@ export function BuilderWorkbench({
             </>
           )}
 
-          {/* Right Live Preview Canvas */}
+          {/* Center Live Preview Canvas */}
           <Panel
             id="preview-panel"
-            defaultSize={layout.isChatCollapsed ? "100%" : `${layout.previewPanelSize}%`}
-            minSize="50%"
+            defaultSize={
+              layout.isChatCollapsed
+                ? showInspector
+                  ? "70%"
+                  : "100%"
+                : showInspector
+                  ? `${Math.max(layout.previewPanelSize - 25, 45)}%`
+                  : `${layout.previewPanelSize}%`
+            }
+            minSize="35%"
             className="relative flex h-full flex-col overflow-hidden"
           >
             <div className="relative flex h-full w-full flex-col">
@@ -130,6 +152,29 @@ export function BuilderWorkbench({
               )}
             </div>
           </Panel>
+
+          {/* Right Docked Visual Inspector Panel (AC-4) */}
+          {showInspector && (
+            <>
+              <Separator
+                onMouseDown={() => setIsDragging(true)}
+                onMouseUp={() => setIsDragging(false)}
+                className="group relative flex w-1.5 items-center justify-center bg-border transition-colors hover:bg-primary/50 focus-visible:bg-primary cursor-col-resize select-none"
+              >
+                <div className="h-8 w-1 rounded-full bg-muted-foreground/30 group-hover:bg-primary transition-colors" />
+              </Separator>
+
+              <Panel
+                id="inspector-panel"
+                defaultSize="25%"
+                minSize="20%"
+                maxSize="40%"
+                className="h-full overflow-hidden"
+              >
+                {inspectorContent}
+              </Panel>
+            </>
+          )}
         </Group>
       </div>
 
@@ -138,8 +183,10 @@ export function BuilderWorkbench({
         <div className="flex-1 overflow-hidden">
           {mobileTab === "chat" ? (
             <div className="h-full w-full overflow-y-auto">{chatContent}</div>
-          ) : (
+          ) : mobileTab === "preview" ? (
             <div className="h-full w-full">{previewContent}</div>
+          ) : (
+            <div className="h-full w-full overflow-y-auto">{inspectorContent}</div>
           )}
         </div>
 
@@ -168,6 +215,18 @@ export function BuilderWorkbench({
             <Eye className="h-4 w-4" />
             <span className="text-xs font-medium">Live Preview</span>
           </Button>
+          {showInspector && (
+            <Button
+              variant={mobileTab === "inspector" ? "secondary" : "ghost"}
+              size="sm"
+              className="flex-1 gap-2"
+              onClick={() => setMobileTab("inspector")}
+              aria-label="Switch to Inspector"
+            >
+              <Sliders className="h-4 w-4" />
+              <span className="text-xs font-medium">Inspector</span>
+            </Button>
+          )}
         </nav>
       </div>
     </div>
