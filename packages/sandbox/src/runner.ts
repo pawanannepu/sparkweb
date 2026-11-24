@@ -5,6 +5,7 @@ import type {
   SnapshotFilesMap,
 } from "@spark/shared";
 import { WebContainer, type WebContainerProcess } from "@webcontainer/api";
+import { parsePreviewDiagnostic } from "./diagnostics";
 import {
   filterSourceFiles,
   STARTER_TEMPLATE_FILES,
@@ -154,18 +155,10 @@ export class WebContainerRunner {
       output.includes("error") ||
       output.includes("Error:") ||
       output.includes("Failed to resolve") ||
-      output.includes("SyntaxError")
+      output.includes("SyntaxError") ||
+      output.includes("Transform failed")
     ) {
-      // Extract line and column if present (e.g. at src/App.tsx:14:2)
-      const match = output.match(/([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+):(\d+):(\d+)/);
-      const parsedLine = match?.[2] ? parseInt(match[2], 10) : undefined;
-      const parsedColumn = match?.[3] ? parseInt(match[3], 10) : undefined;
-      const payload: PreviewErrorPayload = {
-        message: output.trim(),
-        filename: match ? match[1] : undefined,
-        line: Number.isNaN(parsedLine) ? undefined : parsedLine,
-        column: Number.isNaN(parsedColumn) ? undefined : parsedColumn,
-      };
+      const payload = parsePreviewDiagnostic(output);
       this.callbacks.onError?.(payload);
     }
   }

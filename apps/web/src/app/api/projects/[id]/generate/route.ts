@@ -7,12 +7,10 @@ import {
   projects,
   promptMessages,
   promptThreads,
-  saveSnapshot,
   snapshots,
 } from "@spark/db";
 import {
   type FileOperation,
-  filterSourceFiles,
   type GenerationPlan,
   type PlanStep,
   type ProjectFile,
@@ -171,8 +169,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
   }
 
-  const cleanSourceFiles = filterSourceFiles(currentFiles);
-
   // 9. Prepare Server Sent Events response stream
   const responseStream = new TransformStream();
   const writer = responseStream.writable.getWriter();
@@ -214,7 +210,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         },
       ];
 
-      await sendEvent("plan", { steps: planSteps });
+      await sendEvent("plan", {
+        messageId: assistantMessageId,
+        steps: planSteps,
+      });
 
       if (isCancelled) {
         throw new Error("Generation cancelled by user");
@@ -368,26 +367,13 @@ export default function App() {
       // Stage 3: Snapshot Persistence & Finish
       if (planSteps[1]) planSteps[1].status = "completed";
       if (planSteps[2]) planSteps[2].status = "completed";
-      await sendEvent("plan", { steps: planSteps });
-
-      // Update working virtual file tree
-      const updatedTree: SnapshotFilesMap = { ...cleanSourceFiles };
-      for (const file of generatedFiles) {
-        updatedTree[file.path] = { content: file.content };
-      }
-
-      const finalSourceTree = filterSourceFiles(updatedTree);
-
-      // Commit snapshot to PostgreSQL
-      const snapshot = await saveSnapshot(db, {
-        projectId,
-        userId: user.id,
-        files: finalSourceTree,
-        message: prompt,
-        parentId: project.currentSnapshotId || undefined,
+      await sendEvent("plan", {
+        messageId: assistantMessageId,
+        steps: planSteps,
       });
 
-      // Update assistant message with completed status and tool call metadata
+      // Update assistant message with generation metadata; persistence of snapshot
+      // is deferred until the client verifies health in the live preview (AC-2)
       if (assistantMessageId) {
         const generationMeta: GenerationPlan = {
           plan: planSteps,
@@ -401,17 +387,15 @@ export default function App() {
           .update(promptMessages)
           .set({
             content: `Generated changes for: ${prompt}`,
-            status: "completed",
-            snapshotId: snapshot.id,
+            status: "streaming",
             toolCalls: generationMeta as unknown as Record<string, unknown>,
           })
           .where(eq(promptMessages.id, assistantMessageId));
       }
 
-      // Emit finish event with snapshot information
+      // Emit finish event with messageId for deferred snapshot verification (AC-2)
       await sendEvent("finish", {
-        snapshotId: snapshot.id,
-        treeHash: snapshot.treeHash,
+        messageId: assistantMessageId,
       });
     } catch (err: unknown) {
       const errorObj = err as Error;

@@ -17,7 +17,7 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 | 4 | Design system and UI foundation | Foundation | in-progress |
 | 5 | Core generation loop and live preview | Slice 1 | in-progress |
 | 6 | Visual canvas inspector and direct styling | Slice 2 | in-progress |
-| 7 | Self healing verification engine | Slice 3 | planned |
+| 7 | Self healing verification engine | Slice 3 | in-progress |
 | 8 | Version history snapshots and time travel rollback | Slice 4 | planned |
 | 9 | Managed database viewer and client data tools | Slice 5 | planned |
 | 10 | One click publishing and isolated live hosting | Slice 6 | planned |
@@ -118,11 +118,22 @@ spec [0005](../specs/0005-visual-canvas-inspector-and-direct-styling/index.md) �
 
 ## Slice 3: Self healing verification engine
 
-### 7. Self healing verification engine · needs a decision
+### 7. Self healing verification engine
 Intercept runtime errors and build failures in the preview sandbox, parse error logs automatically, invoke a targeted repair pass, and verify that the application recovers before concluding the build.
 **Done when:** broken preview code triggers automated log analysis, the repair loop patches the error, and generations halt safely if an unfixable loop occurs.
+spec [0006](../specs/0006-self-healing-verification-engine/index.md) · code in `apps/web`, `packages/sandbox`, `packages/shared`
+- [x] Design it (spec): `/architect self healing verification engine`
+- [x] Build it: `/develop self healing verification engine`
+  - [x] Shared bridge message contracts, error categories, and sanitized diagnostic parser (AC-1, AC-4, AC-6)
+  - [x] Preview runner event listeners, error overlay inspector, and health check handshake (AC-1, AC-4)
+  - [x] Server side repair route with sibling import context and AI SDK streaming (AC-2, AC-3)
+  - [x] Client generation loop orchestrator, fingerprint loop detector, and deferred snapshot commit (AC-2, AC-6, AC-7)
+  - [x] Healing progress card UI and manual error banner repair trigger (AC-5, AC-8)
+- [x] Verify it: `/check verify self healing verification engine`
+- [x] Test it: `/test self healing verification engine`
+- [x] Review it (fresh model): `/check review self healing verification engine`
+- [x] Document it: `/document self healing verification engine`
 (basis: automated self checks and loop detection prevent broken apps and wasted token runs)
-- [ ] Design it (spec): `/architect self healing verification engine`
 
 ## Slice 4: Version history snapshots and time travel rollback
 

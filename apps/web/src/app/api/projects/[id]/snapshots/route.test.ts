@@ -1,10 +1,12 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockSelect, mockDb, mockSaveSnapshot } = vi.hoisted(() => {
+const { mockSelect, mockUpdate, mockDb, mockSaveSnapshot } = vi.hoisted(() => {
   const mockSelect = vi.fn();
+  const mockUpdate = vi.fn();
   const mockDb = {
     select: mockSelect,
+    update: mockUpdate,
   };
   const mockSaveSnapshot = vi.fn().mockResolvedValue({
     id: "snapshot-test-uuid",
@@ -14,6 +16,7 @@ const { mockSelect, mockDb, mockSaveSnapshot } = vi.hoisted(() => {
 
   return {
     mockSelect,
+    mockUpdate,
     mockDb,
     mockSaveSnapshot,
   };
@@ -57,6 +60,12 @@ describe("POST /api/projects/[id]/snapshots", () => {
         where: vi.fn().mockReturnValue({
           limit: vi.fn().mockResolvedValue([mockProject]),
         }),
+      }),
+    });
+
+    mockUpdate.mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue({}),
       }),
     });
   });
@@ -182,5 +191,65 @@ describe("POST /api/projects/[id]/snapshots", () => {
     const body = await res.json();
     expect(body.error).toBe("Failed to persist snapshot");
     expect(body.message).toContain("Database connection pool exhausted");
+  });
+
+  // covers: AC-7
+  it("updates promptMessages with healingTelemetry when messageId is provided", async () => {
+    vi.mocked(getCurrentUser).mockResolvedValueOnce(mockUser);
+
+    const telemetry = {
+      status: "healed" as const,
+      totalRepairs: 1,
+      attempts: [
+        {
+          attemptIndex: 1,
+          errorFingerprint: "fp-123",
+          category: "import" as const,
+          message: "Failed to resolve import",
+          patchFiles: ["src/App.tsx"],
+          status: "resolved" as const,
+          timestamp: Date.now(),
+        },
+      ],
+    };
+
+    const req = new NextRequest("http://localhost:3000/api/projects/proj-123/snapshots", {
+      method: "POST",
+      body: JSON.stringify({
+        files: { "src/App.tsx": { content: "export default function App() {}" } },
+        messageId: "msg-123",
+        healingTelemetry: telemetry,
+        status: "healed",
+      }),
+    });
+
+    const res = await POST(req, { params: Promise.resolve({ id: "proj-123" }) });
+    expect(res.status).toBe(200);
+
+    expect(mockUpdate).toHaveBeenCalled();
+  });
+
+  // covers: AC-7
+  it("prepends unverified warning to snapshot message when status is exhausted", async () => {
+    vi.mocked(getCurrentUser).mockResolvedValueOnce(mockUser);
+
+    const req = new NextRequest("http://localhost:3000/api/projects/proj-123/snapshots", {
+      method: "POST",
+      body: JSON.stringify({
+        files: { "src/App.tsx": { content: "export default function App() {}" } },
+        message: "Attempted todo app generation",
+        status: "exhausted",
+      }),
+    });
+
+    const res = await POST(req, { params: Promise.resolve({ id: "proj-123" }) });
+    expect(res.status).toBe(200);
+
+    expect(mockSaveSnapshot).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        message: expect.stringContaining("[Unverified - healing exhausted]"),
+      })
+    );
   });
 });

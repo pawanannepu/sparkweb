@@ -420,6 +420,24 @@ window.addEventListener("message", (event: MessageEvent) => {
   }
 });
 
+// Window Runtime Error Listeners
+window.addEventListener("error", (event) => {
+  postToParent("PREVIEW_ERROR", {
+    message: event.message || "Uncaught runtime error",
+    filename: event.filename ? event.filename.split("?")[0].replace(/^[./]+/, "") : undefined,
+    line: event.lineno,
+    column: event.colno,
+    stack: event.error?.stack,
+  });
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  postToParent("PREVIEW_ERROR", {
+    message: event.reason?.message || String(event.reason) || "Unhandled promise rejection",
+    stack: event.reason?.stack,
+  });
+});
+
 // Vite HMR Support
 // @ts-ignore
 if (import.meta && (import.meta as any).hot) {
@@ -432,6 +450,18 @@ if (import.meta && (import.meta as any).hot) {
       updateElementOverlay(selectedElement, selectBox);
     }
     postToParent("PREVIEW_HMR_COMPLETE", { timestamp: Date.now() });
+  });
+
+  // @ts-ignore
+  (import.meta as any).hot.on("vite:error", (errPayload: any) => {
+    const err = errPayload?.err || errPayload;
+    postToParent("PREVIEW_ERROR", {
+      message: err?.message || "Vite compilation error",
+      filename: (err?.id || err?.loc?.file || "").split("?")[0].replace(/^[./]+/, ""),
+      line: err?.loc?.line,
+      column: err?.loc?.column,
+      stack: err?.stack,
+    });
   });
 }
 `,

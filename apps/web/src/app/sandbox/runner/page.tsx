@@ -17,6 +17,11 @@ export default function SandboxRunnerPage() {
   const [logs, setLogs] = useState<Array<{ id: string; text: string }>>([]);
   const [error, setError] = useState<PreviewErrorPayload | null>(null);
   const runnerRef = useRef<WebContainerRunner | null>(null);
+  const latestErrorRef = useRef<PreviewErrorPayload | null>(null);
+  const pendingHealthCheckRef = useRef<{
+    timeoutId: NodeJS.Timeout;
+    resolve: (healthy: boolean, err?: PreviewErrorPayload) => void;
+  } | null>(null);
 
   useEffect(() => {
     // Only execute inside browser
@@ -35,9 +40,28 @@ export default function SandboxRunnerPage() {
       }
     };
 
+    const hasErrorOverlay = (): boolean => {
+      try {
+        const iframe = document.getElementById("sandbox-app-frame") as HTMLIFrameElement | null;
+        if (iframe?.contentDocument) {
+          const overlay = iframe.contentDocument.querySelector("vite-error-overlay");
+          if (overlay) return true;
+        }
+      } catch {
+        // Cross origin fallback
+      }
+      return false;
+    };
+
     const runner = new WebContainerRunner({
       onStatusChange: (newStatus) => {
         setStatus(newStatus);
+        if (newStatus === "error" && pendingHealthCheckRef.current) {
+          const errPayload = latestErrorRef.current || {
+            message: "Runner transitioned to error status",
+          };
+          pendingHealthCheckRef.current.resolve(false, errPayload);
+        }
       },
       onReady: (url) => {
         setPreviewUrl(url);
@@ -45,7 +69,11 @@ export default function SandboxRunnerPage() {
       },
       onError: (err) => {
         setError(err);
+        latestErrorRef.current = err;
         postToHost("PREVIEW_ERROR", err as unknown as Record<string, unknown>);
+        if (pendingHealthCheckRef.current) {
+          pendingHealthCheckRef.current.resolve(false, err);
+        }
       },
       onLog: (line) => {
         setLogs((prev) => [
@@ -80,11 +108,50 @@ export default function SandboxRunnerPage() {
           try {
             const payload = msg.payload as unknown as PreviewWriteFilesPayload;
             if (payload?.files && payload.files.length > 0) {
+              latestErrorRef.current = null;
+              setError(null);
               await runner.applyFileUpdates(payload.files);
             }
           } catch (err: unknown) {
             console.error("Failed to write files to sandbox:", err);
           }
+        } else if (msg.type === "PREVIEW_HEALTH_CHECK") {
+          const payload = msg.payload as { timeoutMs?: number };
+          const timeoutMs = payload?.timeoutMs || 4000;
+
+          if (pendingHealthCheckRef.current) {
+            clearTimeout(pendingHealthCheckRef.current.timeoutId);
+          }
+
+          const resolveHealthCheck = (healthy: boolean, err?: PreviewErrorPayload) => {
+            if (pendingHealthCheckRef.current) {
+              clearTimeout(pendingHealthCheckRef.current.timeoutId);
+              pendingHealthCheckRef.current = null;
+            }
+            postToHost("PREVIEW_HEALTH_STATUS", {
+              healthy,
+              ...(err ? { error: err } : {}),
+            });
+          };
+
+          const timeoutId = setTimeout(() => {
+            const overlayPresent = hasErrorOverlay();
+            if (overlayPresent || latestErrorRef.current || runner.getStatus() === "error") {
+              const reportError = latestErrorRef.current || {
+                message: overlayPresent
+                  ? "Vite error overlay detected in preview DOM"
+                  : "Health check timed out with preview error",
+              };
+              resolveHealthCheck(false, reportError);
+            } else {
+              resolveHealthCheck(true);
+            }
+          }, timeoutMs);
+
+          pendingHealthCheckRef.current = {
+            timeoutId,
+            resolve: resolveHealthCheck,
+          };
         } else if (msg.type === "PREVIEW_RELOAD") {
           if (previewUrl) {
             const iframe = document.getElementById("sandbox-app-frame") as HTMLIFrameElement;
@@ -105,11 +172,33 @@ export default function SandboxRunnerPage() {
         }
       } else {
         // Message originated from inner application iframe -> forward upstream to parent host
-        if (
+        if (msg.type === "PREVIEW_ERROR") {
+          const errPayload = msg.payload as unknown as PreviewErrorPayload;
+          setError(errPayload);
+          latestErrorRef.current = errPayload;
+          postToHost("PREVIEW_ERROR", msg.payload);
+          if (pendingHealthCheckRef.current) {
+            pendingHealthCheckRef.current.resolve(false, errPayload);
+          }
+        } else if (msg.type === "PREVIEW_HMR_COMPLETE") {
+          postToHost("PREVIEW_HMR_COMPLETE", msg.payload);
+          if (pendingHealthCheckRef.current) {
+            setTimeout(() => {
+              const overlay = hasErrorOverlay();
+              if (overlay || latestErrorRef.current) {
+                pendingHealthCheckRef.current?.resolve(
+                  false,
+                  latestErrorRef.current || { message: "Error overlay detected after HMR update" }
+                );
+              } else {
+                pendingHealthCheckRef.current?.resolve(true);
+              }
+            }, 50);
+          }
+        } else if (
           msg.type === "PREVIEW_ELEMENT_HOVER" ||
           msg.type === "PREVIEW_ELEMENT_SELECT" ||
           msg.type === "PREVIEW_UPDATE_TEXT" ||
-          msg.type === "PREVIEW_HMR_COMPLETE" ||
           msg.type === "PREVIEW_NAVIGATE"
         ) {
           if (window.parent && window.parent !== window) {

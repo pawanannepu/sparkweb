@@ -232,6 +232,6 @@ describe("POST /api/projects/[id]/generate", () => {
     expect(streamData).toContain("event: plan");
     expect(streamData).toContain("event: file_op");
     expect(streamData).toContain("event: finish");
-    expect(streamData).toContain("mock-snapshot-uuid");
+    expect(streamData).toContain("msg-123");
   });
 });

@@ -26,5 +26,6 @@ pnpm --filter @spark/shared check-types
 ## Related specs
 
 - [0001-stack-and-architecture](../../docs/specs/0001-stack-and-architecture/index.md)
+- [0006-self-healing-verification-engine](../../docs/specs/0006-self-healing-verification-engine/index.md)
 
 _Drafted by /audit from the repo, worth a quick human pass. Edit freely: once a line stops matching this draft, later runs treat it as curated and will flag rather than overwrite it._

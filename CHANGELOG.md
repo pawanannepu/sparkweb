@@ -34,11 +34,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Direct inline content editable text editing for static leaf JSX text nodes with instant preview updates and Enter key commit (see spec 0005)
 - In memory undo and redo history stack supporting Command+Z and Command+Shift+Z keyboard shortcuts for visual adjustments (see spec 0005)
 - Automated snapshot persistence endpoint committing full project file maps to PostgreSQL after three seconds of user inactivity with parent snapshot lineage tracking (see spec 0005)
+- Structured diagnostic parser categorizing compiler errors, syntax issues, unresolved imports, and runtime exceptions with line shift invariant SHA256 error fingerprints (see spec 0006)
+- Dedicated server repair streaming endpoint using AI SDK to stream targeted file patches with sibling import context without full prompt regeneration (see spec 0006)
+- Health check handshake bridge between host builder and preview runner verifying Vite hot module replacement completion and absence of error overlays (see spec 0006)
+- Client verification loop with error fingerprint history loop detection capping automatic repairs at three attempts per generation turn (see spec 0006)
+- Expandable healing progress card component in generation panel displaying error diagnosis, patch file badges, retry counts, and resolution status (see spec 0006)
+- Interactive manual repair button on preview error banner allowing creators to trigger on demand repair passes with a fresh retry budget (see spec 0006)
+- Deferred snapshot persistence committing project snapshots and healing telemetry to PostgreSQL only after preview health verification succeeds (see spec 0006)
 
 ### Changed
 - Builder workbench default preview target points to the active WebContainer sandbox runner route (see spec 0004)
 - Preview toolbar and builder workbench accommodate right docked inspector panel with responsive layout and mobile tab integration (see spec 0005)
 - Sandbox starter template bundles custom Vite inspector plugin and client runtime script for source location tagging (see spec 0005)
+- Server generation route defers snapshot persistence and returns message identifiers in event streams for client verification orchestration (see spec 0006)
+- Preview runner listens for hot module replacement events and responds to health verification probes (see spec 0006)
 
 ### Security
 - Encrypted storage for personal provider credentials at rest with authentication tag tamper verification (see spec 0002)
@@ -47,3 +56,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross origin isolation headers across builder workbench and sandbox runner enabling WebAssembly SharedArrayBuffer execution (see spec 0004)
 - Workspace source boundary enforcement in client AST modifier rejecting modifications to external node_modules or path traversal attempts (see spec 0005)
 - Read only warning badges and disabled editing controls for unmapped or third party components (see spec 0005)
+- Fingerprint loop detection preventing infinite circular repair passes and runaway token consumption (see spec 0006)

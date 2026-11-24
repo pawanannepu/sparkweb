@@ -1,13 +1,16 @@
 "use client";
 
-import type { FileOperation, PlanStep } from "@spark/shared";
+import type { FileOperation, HealingTelemetry, PlanStep } from "@spark/shared";
 import {
+  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   Circle,
   FileCode2,
   Loader2,
+  Sparkles,
+  Wrench,
   XCircle,
 } from "lucide-react";
 import { useState } from "react";
@@ -18,6 +21,7 @@ export interface GenerationProgressCardProps {
   isStreaming: boolean;
   planSteps: PlanStep[];
   fileOperations: FileOperation[];
+  healingTelemetry?: HealingTelemetry;
   className?: string;
 }
 
@@ -25,16 +29,26 @@ export function GenerationProgressCard({
   isStreaming,
   planSteps,
   fileOperations,
+  healingTelemetry,
   className,
 }: GenerationProgressCardProps) {
   const [showDiff, setShowDiff] = useState(false);
+  const [showHealing, setShowHealing] = useState(true);
 
-  if (planSteps.length === 0 && fileOperations.length === 0 && !isStreaming) {
+  if (
+    planSteps.length === 0 &&
+    fileOperations.length === 0 &&
+    !isStreaming &&
+    (!healingTelemetry || healingTelemetry.status === "none")
+  ) {
     return null;
   }
 
   const completedSteps = planSteps.filter((s) => s.status === "completed").length;
   const totalSteps = planSteps.length;
+  const hasHealingData =
+    healingTelemetry &&
+    (healingTelemetry.status !== "none" || healingTelemetry.attempts.length > 0);
 
   return (
     <div
@@ -136,6 +150,117 @@ export function GenerationProgressCard({
                   <pre className="whitespace-pre-wrap text-emerald-400">
                     {op.diff || "+ full file write completed"}
                   </pre>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Self Healing Verification Card (AC-5) */}
+      {hasHealingData && (
+        <div className="pt-2 border-t border-border/60 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              {healingTelemetry?.status === "in_progress" && (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" />
+              )}
+              {healingTelemetry?.status === "healed" && (
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+              )}
+              {healingTelemetry?.status === "exhausted" && (
+                <AlertTriangle className="h-3.5 w-3.5 text-rose-400" />
+              )}
+              <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                <Sparkles className="h-3 w-3 text-indigo-400" />
+                <span>
+                  {healingTelemetry?.status === "in_progress" &&
+                    `Self healing in progress (${healingTelemetry.attempts.length}/3)`}
+                  {healingTelemetry?.status === "healed" &&
+                    `Self healed successfully (${healingTelemetry.totalRepairs} repair${
+                      healingTelemetry.totalRepairs > 1 ? "s" : ""
+                    })`}
+                  {healingTelemetry?.status === "exhausted" &&
+                    "Self healing attempts exhausted (3 attempt limit)"}
+                </span>
+              </span>
+            </div>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowHealing((prev) => !prev)}
+              className="h-6 gap-1 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              <span>{showHealing ? "Hide details" : "Show details"}</span>
+              {showHealing ? (
+                <ChevronUp className="h-3 w-3" />
+              ) : (
+                <ChevronDown className="h-3 w-3" />
+              )}
+            </Button>
+          </div>
+
+          {showHealing && healingTelemetry && (
+            <div className="space-y-2 rounded-lg border border-border/70 bg-muted/20 p-2.5 text-xs">
+              {healingTelemetry.attempts.map((attempt) => (
+                <div
+                  key={`${attempt.attemptIndex}-${attempt.errorFingerprint}`}
+                  className="rounded border border-border/60 bg-background/80 p-2 space-y-1.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-semibold text-foreground text-[11px]">
+                        Attempt #{attempt.attemptIndex}
+                      </span>
+                      <Badge
+                        variant="secondary"
+                        className="text-[10px] px-1.5 py-0 capitalize font-mono"
+                      >
+                        {attempt.category}
+                      </Badge>
+                      {attempt.filePath && (
+                        <span className="font-mono text-[10px] text-muted-foreground">
+                          {attempt.filePath}
+                          {attempt.line !== undefined ? `:${attempt.line}` : ""}
+                        </span>
+                      )}
+                    </div>
+                    <span
+                      className={`text-[10px] font-medium capitalize ${
+                        attempt.status === "resolved"
+                          ? "text-emerald-400"
+                          : attempt.status === "patching"
+                            ? "text-indigo-400"
+                            : attempt.status === "unfixable"
+                              ? "text-rose-400"
+                              : "text-muted-foreground"
+                      }`}
+                    >
+                      {attempt.status}
+                    </span>
+                  </div>
+
+                  <p className="font-mono text-[10px] leading-relaxed text-muted-foreground bg-slate-950/60 p-1.5 rounded border border-border/40 whitespace-pre-wrap">
+                    {attempt.message}
+                  </p>
+
+                  {attempt.patchFiles.length > 0 && (
+                    <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                      <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                        <Wrench className="h-2.5 w-2.5" /> Patched:
+                      </span>
+                      {attempt.patchFiles.map((path) => (
+                        <Badge
+                          key={path}
+                          variant="outline"
+                          className="text-[10px] px-1 py-0 font-mono text-indigo-400 border-indigo-500/30"
+                        >
+                          {path}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

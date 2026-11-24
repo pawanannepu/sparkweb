@@ -47,7 +47,7 @@ export default function BuilderPage() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const sandboxUrl = process.env.NEXT_PUBLIC_SANDBOX_URL || "/sandbox/runner";
 
-  const { isConnected, sendToPreview } = usePreviewBridge({
+  const { isConnected, sendToPreview, checkPreviewHealth } = usePreviewBridge({
     iframeRef,
     targetUrl: sandboxUrl,
     onMessage: (msg) => {
@@ -68,38 +68,8 @@ export default function BuilderPage() {
     },
   });
 
-  const { isStreaming, planSteps, fileOperations, submitPrompt, cancelGeneration } =
-    useGenerationLoop({
-      projectId,
-      onFileChange: (file: ProjectFile) => {
-        // Forward streamed file modification to in-browser WebContainer immediately
-        sendToPreview("PREVIEW_WRITE_FILES", { files: [file] });
-        setPreviewError(null);
-        updateFileContent(file.path, file.content, "AI streaming generation");
-      },
-      onFinish: (snapshotId: string, _treeHash: string) => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: String(Date.now()),
-            role: "assistant",
-            content: `All planned components and routes have been built and verified in the live preview. Snapshot ${snapshotId.slice(0, 8)} committed.`,
-          },
-        ]);
-      },
-      onError: (errMessage: string) => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: String(Date.now()),
-            role: "assistant",
-            content: `Generation stopped: ${errMessage}`,
-          },
-        ]);
-      },
-    });
-
   const {
+    files,
     selectedElement,
     setSelectedElement,
     isInspectMode,
@@ -114,12 +84,53 @@ export default function BuilderPage() {
   } = useProjectFiles({
     projectId,
     initialFiles: STARTER_TEMPLATE_FILES,
-    isStreaming,
+    isStreaming: false,
     onWriteFiles: (filesToWrite) => {
       sendToPreview("PREVIEW_WRITE_FILES", { files: filesToWrite });
     },
     onSendBridgeMessage: (type, payload) => {
       sendToPreview(type as BridgeMessageType, payload);
+    },
+  });
+
+  const {
+    isStreaming,
+    planSteps,
+    fileOperations,
+    healingTelemetry,
+    submitPrompt,
+    triggerRepair,
+    cancelGeneration,
+  } = useGenerationLoop({
+    projectId,
+    getCurrentFiles: () =>
+      Object.fromEntries(Object.entries(files).map(([k, v]) => [k, v.content])),
+    requestHealthCheck: checkPreviewHealth,
+    onFileChange: (file: ProjectFile) => {
+      // Forward streamed file modification to in-browser WebContainer immediately
+      sendToPreview("PREVIEW_WRITE_FILES", { files: [file] });
+      setPreviewError(null);
+      updateFileContent(file.path, file.content, "AI streaming generation");
+    },
+    onFinish: (snapshotId: string, _treeHash: string) => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: String(Date.now()),
+          role: "assistant",
+          content: `All planned components and routes have been built and verified in the live preview. Snapshot ${snapshotId.slice(0, 8)} committed.`,
+        },
+      ]);
+    },
+    onError: (errMessage: string) => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: String(Date.now()),
+          role: "assistant",
+          content: `Generation stopped: ${errMessage}`,
+        },
+      ]);
     },
   });
 
@@ -222,11 +233,12 @@ export default function BuilderPage() {
                 ))}
 
                 {/* Live Progress Card when streaming or active steps present */}
-                {(isStreaming || planSteps.length > 0) && (
+                {(isStreaming || planSteps.length > 0 || healingTelemetry.status !== "none") && (
                   <GenerationProgressCard
                     isStreaming={isStreaming}
                     planSteps={planSteps}
                     fileOperations={fileOperations}
+                    healingTelemetry={healingTelemetry}
                   />
                 )}
               </div>
@@ -287,7 +299,23 @@ export default function BuilderPage() {
 
             {previewError && (
               <div className="p-3 bg-muted/40 border-b border-border">
-                <PreviewErrorBanner error={previewError} onDismiss={() => setPreviewError(null)} />
+                <PreviewErrorBanner
+                  error={previewError}
+                  onRepair={(err) => {
+                    setMessages((prev) => [
+                      ...prev,
+                      {
+                        id: String(Date.now()),
+                        role: "assistant",
+                        content: `Initiating automated repair pass for: ${err.message.slice(0, 80)}`,
+                      },
+                    ]);
+                    triggerRepair(err);
+                  }}
+                  isRepairing={isStreaming && healingTelemetry.status === "in_progress"}
+                  remainingRetries={Math.max(0, 3 - healingTelemetry.totalRepairs)}
+                  onDismiss={() => setPreviewError(null)}
+                />
               </div>
             )}
 

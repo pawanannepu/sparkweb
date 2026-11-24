@@ -92,7 +92,18 @@ export type BridgeMessageType =
   | "PREVIEW_ELEMENT_SELECT"
   | "PREVIEW_INJECT_STYLES"
   | "PREVIEW_UPDATE_TEXT"
-  | "PREVIEW_HMR_COMPLETE";
+  | "PREVIEW_HMR_COMPLETE"
+  | "PREVIEW_HEALTH_CHECK"
+  | "PREVIEW_HEALTH_STATUS";
+
+export type HealingCategory = "compiler" | "runtime" | "import" | "syntax";
+export type HealingAttemptStatus =
+  | "analyzing"
+  | "patching"
+  | "verifying"
+  | "resolved"
+  | "unfixable";
+export type HealingOverallStatus = "none" | "in_progress" | "healed" | "exhausted";
 
 export interface PreviewErrorPayload {
   message: string;
@@ -100,6 +111,36 @@ export interface PreviewErrorPayload {
   line?: number;
   column?: number;
   stack?: string;
+  category?: HealingCategory;
+  errorFingerprint?: string;
+}
+
+export interface HealingAttempt {
+  attemptIndex: number;
+  errorFingerprint: string;
+  category: HealingCategory;
+  message: string;
+  filePath?: string;
+  line?: number;
+  column?: number;
+  patchFiles: string[];
+  status: HealingAttemptStatus;
+  timestamp: number;
+}
+
+export interface HealingTelemetry {
+  status: HealingOverallStatus;
+  totalRepairs: number;
+  attempts: HealingAttempt[];
+}
+
+export interface PreviewHealthCheckPayload {
+  timeoutMs: number;
+}
+
+export interface PreviewHealthStatusPayload {
+  healthy: boolean;
+  error?: PreviewErrorPayload;
 }
 
 export interface PreviewBootPayload {

@@ -1,16 +1,26 @@
 "use client";
 
 import type { PreviewErrorPayload } from "@spark/shared";
-import { AlertCircle, Wrench, X } from "lucide-react";
+import { AlertCircle, Loader2, Wrench, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export interface PreviewErrorBannerProps {
   error: PreviewErrorPayload | null;
+  onRepair?: (error: PreviewErrorPayload) => void;
+  isRepairing?: boolean;
+  remainingRetries?: number;
   onDismiss?: () => void;
   className?: string;
 }
 
-export function PreviewErrorBanner({ error, onDismiss, className }: PreviewErrorBannerProps) {
+export function PreviewErrorBanner({
+  error,
+  onRepair,
+  isRepairing = false,
+  remainingRetries = 3,
+  onDismiss,
+  className,
+}: PreviewErrorBannerProps) {
   if (!error) return null;
 
   return (
@@ -20,9 +30,14 @@ export function PreviewErrorBanner({ error, onDismiss, className }: PreviewError
       }`}
     >
       <AlertCircle className="h-5 w-5 shrink-0 text-rose-400 mt-0.5" />
-      <div className="flex-1 space-y-1">
+      <div className="flex-1 space-y-2">
         <div className="flex items-center gap-2 font-semibold text-rose-300">
           <span>Preview Compilation Warning</span>
+          {error.category && (
+            <span className="rounded bg-rose-900/60 px-1.5 py-0.5 font-mono text-[10px] text-rose-200 uppercase">
+              {error.category}
+            </span>
+          )}
           {error.filename && (
             <span className="rounded bg-rose-900/50 px-1.5 py-0.5 font-mono text-[10px] text-rose-300">
               {error.filename}
@@ -30,14 +45,44 @@ export function PreviewErrorBanner({ error, onDismiss, className }: PreviewError
             </span>
           )}
         </div>
+
         <p className="font-mono text-[11px] leading-relaxed text-rose-200/90 whitespace-pre-wrap">
           {error.message}
         </p>
-        <div className="flex items-center gap-1.5 pt-1 text-[11px] text-rose-300/80">
-          <Wrench className="h-3 w-3" />
-          <span>Prompt sparkweb to repair this syntax issue, or edit the file directly.</span>
-        </div>
+
+        {/* Interactive manual repair action with remaining retry counter (AC-8) */}
+        {onRepair ? (
+          <div className="flex items-center gap-2 pt-1">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onRepair(error)}
+              disabled={isRepairing || remainingRetries <= 0}
+              className="h-7 gap-1.5 px-2.5 text-xs bg-rose-900/30 border-rose-800 text-rose-200 hover:bg-rose-900/60 hover:text-white"
+            >
+              {isRepairing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-300" />
+              ) : (
+                <Wrench className="h-3.5 w-3.5 text-rose-400" />
+              )}
+              <span>
+                {isRepairing
+                  ? "Repairing preview..."
+                  : `Repair in sparkweb (${remainingRetries} tries left)`}
+              </span>
+            </Button>
+            <span className="text-[11px] text-rose-300/80">
+              Run targeted self healing pass on this file
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5 pt-1 text-[11px] text-rose-300/80">
+            <Wrench className="h-3 w-3" />
+            <span>Prompt sparkweb to repair this syntax issue, or edit the file directly.</span>
+          </div>
+        )}
       </div>
+
       {onDismiss && (
         <Button
           variant="ghost"

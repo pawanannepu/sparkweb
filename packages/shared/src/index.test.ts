@@ -5,6 +5,7 @@ import type {
   CanvasHistoryStack,
   ElementRect,
   ElementSourceLocation,
+  PreviewErrorPayload,
   PreviewEvent,
   PreviewInspectModePayload,
   PreviewStatus,
@@ -98,5 +99,42 @@ describe("shared type contracts", () => {
     expect(state.source?.file).toBe("src/App.tsx");
     expect(state.rect.width).toBe(200);
     expect(history.present["src/App.tsx"]).toContain("App");
+  });
+
+  it("validates self healing verification payload types and bridge messages", () => {
+    // Arrange
+    const healthCheckMsg: BridgeMessage = {
+      protocol: "sparkweb:bridge:v1",
+      type: "PREVIEW_HEALTH_CHECK",
+      source: "sparkweb:host",
+      payload: { timeoutMs: 4000 },
+      timestamp: Date.now(),
+    };
+
+    const errorPayload: PreviewErrorPayload = {
+      message: "Failed to resolve import lucide-react/icons/missing from src/App.tsx",
+      filename: "src/App.tsx",
+      line: 4,
+      column: 8,
+      category: "import",
+      errorFingerprint: "abcdef123456",
+    };
+
+    const healthStatusMsg: BridgeMessage = {
+      protocol: "sparkweb:bridge:v1",
+      type: "PREVIEW_HEALTH_STATUS",
+      source: "sparkweb:sandbox",
+      payload: {
+        healthy: false,
+        error: errorPayload,
+      },
+      timestamp: Date.now(),
+    };
+
+    // Assert
+    expect(healthCheckMsg.type).toBe("PREVIEW_HEALTH_CHECK");
+    expect(healthStatusMsg.type).toBe("PREVIEW_HEALTH_STATUS");
+    expect(errorPayload.category).toBe("import");
+    expect(errorPayload.errorFingerprint).toBe("abcdef123456");
   });
 });
