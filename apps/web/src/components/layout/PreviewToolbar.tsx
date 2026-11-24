@@ -3,6 +3,7 @@
 import type { DeviceMode } from "@spark/shared";
 import {
   ExternalLink,
+  History,
   Monitor,
   MousePointerClick,
   RotateCw,
@@ -26,6 +27,9 @@ export interface PreviewToolbarProps {
   sandboxUrl?: string;
   isInspectMode?: boolean;
   onToggleInspect?: () => void;
+  branchSwitcher?: React.ReactNode;
+  isHistoryOpen?: boolean;
+  onToggleHistory?: () => void;
 }
 
 export function PreviewToolbar({
@@ -38,6 +42,9 @@ export function PreviewToolbar({
   sandboxUrl,
   isInspectMode = false,
   onToggleInspect,
+  branchSwitcher,
+  isHistoryOpen = false,
+  onToggleHistory,
 }: PreviewToolbarProps) {
   const [inputPath, setInputPath] = useState(currentPath);
 
@@ -68,6 +75,7 @@ export function PreviewToolbar({
       <header className="flex h-11 items-center justify-between gap-2 border-b border-border bg-card/60 px-3 py-1.5 backdrop-blur">
         {/* Device Mode Switcher */}
         <div className="flex items-center gap-1">
+          {branchSwitcher && <div className="mr-1">{branchSwitcher}</div>}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -136,6 +144,28 @@ export function PreviewToolbar({
 
         {/* Action Buttons */}
         <div className="flex items-center gap-1">
+          {/* Version History Toggle (AC-4, AC-5) */}
+          {onToggleHistory && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={isHistoryOpen ? "secondary" : "ghost"}
+                  size="icon"
+                  className={cn(
+                    "h-7 w-7 transition-colors",
+                    isHistoryOpen && "bg-primary text-primary-foreground hover:bg-primary/90"
+                  )}
+                  onClick={onToggleHistory}
+                  aria-label={isHistoryOpen ? "Close version history" : "Open version history"}
+                  aria-pressed={isHistoryOpen}
+                >
+                  <History className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Version history & snapshots</TooltipContent>
+            </Tooltip>
+          )}
+
           {/* Canvas Inspector Toggle (AC-1) */}
           {onToggleInspect && (
             <Tooltip>

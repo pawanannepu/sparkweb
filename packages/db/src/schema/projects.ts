@@ -10,6 +10,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { users } from "./auth";
 import { deployments } from "./deployments";
+import { projectBranches } from "./project-branches";
 import { promptThreads } from "./prompt-threads";
 import { snapshots } from "./snapshots";
 
@@ -28,6 +29,9 @@ export const projects = pgTable(
       onDelete: "set null",
     }),
     currentSnapshotId: uuid("current_snapshot_id").references((): AnyPgColumn => snapshots.id, {
+      onDelete: "set null",
+    }),
+    activeBranchId: uuid("active_branch_id").references((): AnyPgColumn => projectBranches.id, {
       onDelete: "set null",
     }),
     createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
@@ -51,6 +55,12 @@ export const projectsRelations = relations(projects, ({ one, many }) => ({
     references: [snapshots.id],
     relationName: "projectCurrentSnapshot",
   }),
+  activeBranch: one(projectBranches, {
+    fields: [projects.activeBranchId],
+    references: [projectBranches.id],
+    relationName: "projectActiveBranch",
+  }),
+  branches: many(projectBranches, { relationName: "projectBranches" }),
   promptThreads: many(promptThreads),
   snapshots: many(snapshots, { relationName: "projectSnapshots" }),
   deployments: many(deployments),

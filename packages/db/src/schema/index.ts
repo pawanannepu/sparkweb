@@ -2,6 +2,7 @@ import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
 import type { apiKeys } from "./api-keys";
 import type { accounts, sessions, users, verificationTokens } from "./auth";
 import type { deployments } from "./deployments";
+import type { projectBranches } from "./project-branches";
 import type { projects } from "./projects";
 import type { promptMessages, promptThreads } from "./prompt-threads";
 import type { snapshots } from "./snapshots";
@@ -9,6 +10,7 @@ import type { snapshots } from "./snapshots";
 export * from "./api-keys";
 export * from "./auth";
 export * from "./deployments";
+export * from "./project-branches";
 export * from "./projects";
 export * from "./prompt-threads";
 export * from "./snapshots";
@@ -30,6 +32,9 @@ export type NewApiKey = InferInsertModel<typeof apiKeys>;
 
 export type Project = InferSelectModel<typeof projects>;
 export type NewProject = InferInsertModel<typeof projects>;
+
+export type ProjectBranch = InferSelectModel<typeof projectBranches>;
+export type NewProjectBranch = InferInsertModel<typeof projectBranches>;
 
 export type PromptThread = InferSelectModel<typeof promptThreads>;
 export type NewPromptThread = InferInsertModel<typeof promptThreads>;

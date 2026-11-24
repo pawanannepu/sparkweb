@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, type SQL, sql } from "drizzle-orm";
 import type { PgDatabase } from "drizzle-orm/pg-core";
 import { computeSnapshotTreeHash, decryptApiKey, encryptApiKey, extractKeyHint } from "./crypto";
 import {
@@ -15,12 +15,15 @@ import {
   type Deployment,
   deployments,
   type Project,
+  type ProjectBranch,
   type PromptMessage,
+  projectBranches,
   projects,
   promptMessages,
   promptThreads,
   type Snapshot,
   type SnapshotFilesMap,
+  type SnapshotTrigger,
   snapshots,
 } from "./schema/index";
 
@@ -98,6 +101,25 @@ export async function createProject(
     throw new Error("Failed to insert project");
   }
 
+  // Automatically create default 'main' branch on project creation (AC-1, AC-4)
+  const branchResult = await db
+    .insert(projectBranches)
+    .values({
+      projectId: created.id,
+      name: "main",
+      headSnapshotId: null,
+    })
+    .returning();
+
+  const mainBranch = branchResult[0];
+  if (mainBranch) {
+    await db
+      .update(projects)
+      .set({ activeBranchId: mainBranch.id })
+      .where(eq(projects.id, created.id));
+    created.activeBranchId = mainBranch.id;
+  }
+
   return created;
 }
 
@@ -150,7 +172,20 @@ export async function getProjectWithCurrentSnapshot(
   };
 }
 
-export type SnapshotHistoryEntry = Omit<Snapshot, "files">;
+export interface SnapshotHistoryEntry {
+  id: string;
+  projectId: string;
+  parentId: string | null;
+  branchId: string | null;
+  branchName: string;
+  treeHash: string;
+  fileCount: number;
+  message: string | null;
+  trigger: string;
+  tag: string | null;
+  restoredFromSnapshotId: string | null;
+  createdAt: Date;
+}
 
 export async function getProjectSnapshots(
   db: DatabaseClient,
@@ -177,9 +212,14 @@ export async function getProjectSnapshots(
       id: snapshots.id,
       projectId: snapshots.projectId,
       parentId: snapshots.parentId,
+      branchId: snapshots.branchId,
       branchName: snapshots.branchName,
       treeHash: snapshots.treeHash,
+      fileCount: snapshots.fileCount,
       message: snapshots.message,
+      trigger: snapshots.trigger,
+      tag: snapshots.tag,
+      restoredFromSnapshotId: snapshots.restoredFromSnapshotId,
       createdAt: snapshots.createdAt,
     })
     .from(snapshots)
@@ -189,23 +229,23 @@ export async function getProjectSnapshots(
   return rows;
 }
 
-export interface SaveSnapshotParams {
+export interface GetPaginatedSnapshotsParams {
   projectId: string;
   userId: string;
-  parentId?: string;
-  files: SnapshotFilesMap;
-  message?: string;
-  branchName?: string;
+  branchId?: string;
+  cursor?: string;
+  limit?: number;
 }
 
-export async function saveSnapshot(
-  db: DatabaseClient,
-  params: SaveSnapshotParams
-): Promise<Snapshot> {
-  if (!params.files || typeof params.files !== "object") {
-    throw new ValidationError("Snapshot files must be a valid file map object");
-  }
+export interface PaginatedSnapshotsResult {
+  items: SnapshotHistoryEntry[];
+  nextCursor: string | null;
+}
 
+export async function getPaginatedSnapshots(
+  db: DatabaseClient,
+  params: GetPaginatedSnapshotsParams
+): Promise<PaginatedSnapshotsResult> {
   const projectRows = await db
     .select({ id: projects.id, userId: projects.userId })
     .from(projects)
@@ -221,17 +261,202 @@ export async function saveSnapshot(
     throw new ForbiddenError("You do not have access to this project");
   }
 
+  const limit = Math.min(Math.max(params.limit ?? 30, 1), 100);
+
+  let cursorCondition: SQL | undefined;
+  if (params.cursor) {
+    try {
+      const decodedStr = Buffer.from(params.cursor, "base64").toString("utf-8");
+      const parsed = JSON.parse(decodedStr);
+      if (parsed?.createdAt && parsed.id) {
+        cursorCondition = sql`(${snapshots.createdAt} < ${parsed.createdAt}::timestamp OR (${snapshots.createdAt} = ${parsed.createdAt}::timestamp AND ${snapshots.id} < ${parsed.id}::uuid))`;
+      }
+    } catch {
+      // Ignore invalid cursor
+    }
+  }
+
+  const conditions = [
+    eq(snapshots.projectId, params.projectId),
+    params.branchId ? eq(snapshots.branchId, params.branchId) : undefined,
+    cursorCondition,
+  ].filter(Boolean);
+
+  const rows = await db
+    .select({
+      id: snapshots.id,
+      projectId: snapshots.projectId,
+      parentId: snapshots.parentId,
+      branchId: snapshots.branchId,
+      branchName: snapshots.branchName,
+      treeHash: snapshots.treeHash,
+      fileCount: snapshots.fileCount,
+      message: snapshots.message,
+      trigger: snapshots.trigger,
+      tag: snapshots.tag,
+      restoredFromSnapshotId: snapshots.restoredFromSnapshotId,
+      createdAt: snapshots.createdAt,
+    })
+    .from(snapshots)
+    .where(and(...conditions))
+    .orderBy(desc(snapshots.createdAt), desc(snapshots.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const items = hasMore ? rows.slice(0, limit) : rows;
+
+  let nextCursor: string | null = null;
+  if (hasMore && items.length > 0) {
+    const lastItem = items[items.length - 1];
+    if (lastItem) {
+      nextCursor = Buffer.from(
+        JSON.stringify({
+          createdAt: lastItem.createdAt.toISOString(),
+          id: lastItem.id,
+        })
+      ).toString("base64");
+    }
+  }
+
+  return {
+    items,
+    nextCursor,
+  };
+}
+
+export async function getSnapshotById(
+  db: DatabaseClient,
+  params: { projectId: string; userId: string; snapshotId: string }
+): Promise<Snapshot> {
+  const projectRows = await db
+    .select({ id: projects.id, userId: projects.userId })
+    .from(projects)
+    .where(eq(projects.id, params.projectId))
+    .limit(1);
+
+  const project = projectRows[0];
+  if (!project) {
+    throw new NotFoundError(`Project ${params.projectId} not found`);
+  }
+
+  if (project.userId !== params.userId) {
+    throw new ForbiddenError("You do not have access to this project");
+  }
+
+  const snapshotRows = await db
+    .select()
+    .from(snapshots)
+    .where(and(eq(snapshots.id, params.snapshotId), eq(snapshots.projectId, params.projectId)))
+    .limit(1);
+
+  const snapshot = snapshotRows[0];
+  if (!snapshot) {
+    throw new NotFoundError(`Snapshot ${params.snapshotId} not found`);
+  }
+
+  return snapshot;
+}
+
+export interface SaveSnapshotParams {
+  projectId: string;
+  userId: string;
+  parentId?: string;
+  files: SnapshotFilesMap;
+  message?: string;
+  branchName?: string;
+  branchId?: string;
+  trigger?: SnapshotTrigger;
+  tag?: string;
+  restoredFromSnapshotId?: string;
+}
+
+export async function saveSnapshot(
+  db: DatabaseClient,
+  params: SaveSnapshotParams
+): Promise<Snapshot> {
+  if (!params.files || typeof params.files !== "object") {
+    throw new ValidationError("Snapshot files must be a valid file map object");
+  }
+
+  const projectRows = await db
+    .select({
+      id: projects.id,
+      userId: projects.userId,
+      activeBranchId: projects.activeBranchId,
+      currentSnapshotId: projects.currentSnapshotId,
+    })
+    .from(projects)
+    .where(eq(projects.id, params.projectId))
+    .limit(1);
+
+  const project = projectRows[0];
+  if (!project) {
+    throw new NotFoundError(`Project ${params.projectId} not found`);
+  }
+
+  if (project.userId !== params.userId) {
+    throw new ForbiddenError("You do not have access to this project");
+  }
+
+  // Resolve target branch
+  let targetBranchId = params.branchId ?? project.activeBranchId ?? null;
+  let targetBranchName = params.branchName ?? "main";
+
+  if (targetBranchId) {
+    const branchRows = await db
+      .select({ id: projectBranches.id, name: projectBranches.name })
+      .from(projectBranches)
+      .where(
+        and(eq(projectBranches.id, targetBranchId), eq(projectBranches.projectId, params.projectId))
+      )
+      .limit(1);
+    if (branchRows[0]) {
+      targetBranchName = branchRows[0].name;
+    } else {
+      targetBranchId = null;
+    }
+  }
+
+  if (!targetBranchId) {
+    const mainBranchRows = await db
+      .select({ id: projectBranches.id, name: projectBranches.name })
+      .from(projectBranches)
+      .where(and(eq(projectBranches.projectId, params.projectId), eq(projectBranches.name, "main")))
+      .limit(1);
+    if (mainBranchRows[0]) {
+      targetBranchId = mainBranchRows[0].id;
+      targetBranchName = mainBranchRows[0].name;
+    } else {
+      const createdMain = await db
+        .insert(projectBranches)
+        .values({
+          projectId: params.projectId,
+          name: "main",
+          headSnapshotId: null,
+        })
+        .returning();
+      targetBranchId = createdMain[0]?.id ?? null;
+      targetBranchName = "main";
+    }
+  }
+
   const treeHash = computeSnapshotTreeHash(params.files);
+  const fileCount = Object.keys(params.files).length;
 
   const snapshotRows = await db
     .insert(snapshots)
     .values({
       projectId: params.projectId,
       parentId: params.parentId,
-      branchName: params.branchName ?? "main",
+      branchId: targetBranchId,
+      branchName: targetBranchName,
       treeHash,
       files: params.files,
+      fileCount,
       message: params.message?.trim(),
+      trigger: params.trigger ?? "generation",
+      tag: params.tag?.trim() || null,
+      restoredFromSnapshotId: params.restoredFromSnapshotId || null,
     })
     .returning();
 
@@ -240,16 +465,438 @@ export async function saveSnapshot(
     throw new Error("Failed to create snapshot");
   }
 
-  // Advance projects.currentSnapshotId to newly created snapshot
+  // Advance branch head if branch exists
+  if (targetBranchId) {
+    await db
+      .update(projectBranches)
+      .set({
+        headSnapshotId: createdSnapshot.id,
+        updatedAt: new Date(),
+      })
+      .where(eq(projectBranches.id, targetBranchId));
+  }
+
+  // Advance projects.currentSnapshotId and activeBranchId to newly created snapshot
   await db
     .update(projects)
     .set({
       currentSnapshotId: createdSnapshot.id,
+      activeBranchId: targetBranchId,
       updatedAt: new Date(),
     })
     .where(eq(projects.id, params.projectId));
 
   return createdSnapshot;
+}
+
+export async function checkActiveGeneration(
+  db: DatabaseClient,
+  params: { projectId: string }
+): Promise<boolean> {
+  const streamingMessages = await db
+    .select({ id: promptMessages.id })
+    .from(promptMessages)
+    .innerJoin(promptThreads, eq(promptMessages.threadId, promptThreads.id))
+    .where(
+      and(eq(promptThreads.projectId, params.projectId), eq(promptMessages.status, "streaming"))
+    )
+    .limit(1);
+
+  return streamingMessages.length > 0;
+}
+
+export interface BranchWithStatus extends ProjectBranch {
+  isMain: boolean;
+  isActive: boolean;
+}
+
+export async function getProjectBranches(
+  db: DatabaseClient,
+  params: { projectId: string; userId: string }
+): Promise<{ branches: BranchWithStatus[]; activeBranchId: string | null }> {
+  const projectRows = await db
+    .select({ id: projects.id, userId: projects.userId, activeBranchId: projects.activeBranchId })
+    .from(projects)
+    .where(eq(projects.id, params.projectId))
+    .limit(1);
+
+  const project = projectRows[0];
+  if (!project) {
+    throw new NotFoundError(`Project ${params.projectId} not found`);
+  }
+
+  if (project.userId !== params.userId) {
+    throw new ForbiddenError("You do not have access to this project");
+  }
+
+  const branchRows = await db
+    .select()
+    .from(projectBranches)
+    .where(eq(projectBranches.projectId, params.projectId))
+    .orderBy(projectBranches.createdAt);
+
+  const branches: BranchWithStatus[] = branchRows.map((b) => ({
+    ...b,
+    isMain: b.name === "main",
+    isActive: b.id === project.activeBranchId,
+  }));
+
+  return {
+    branches,
+    activeBranchId: project.activeBranchId,
+  };
+}
+
+export interface CreateBranchParams {
+  projectId: string;
+  userId: string;
+  name: string;
+  fromSnapshotId?: string;
+  switchActive?: boolean;
+}
+
+export async function createBranch(
+  db: DatabaseClient,
+  params: CreateBranchParams
+): Promise<ProjectBranch> {
+  const projectRows = await db
+    .select({
+      id: projects.id,
+      userId: projects.userId,
+      currentSnapshotId: projects.currentSnapshotId,
+    })
+    .from(projects)
+    .where(eq(projects.id, params.projectId))
+    .limit(1);
+
+  const project = projectRows[0];
+  if (!project) {
+    throw new NotFoundError(`Project ${params.projectId} not found`);
+  }
+
+  if (project.userId !== params.userId) {
+    throw new ForbiddenError("You do not have access to this project");
+  }
+
+  const rawName = params.name.toLowerCase().trim();
+  const sanitized = rawName.replace(/[^a-z0-9-]+/g, "-").replace(/(^-|-$)/g, "");
+  if (!sanitized || sanitized.length > 50) {
+    throw new ValidationError(
+      "Branch name must be lowercase alphanumeric characters and hyphens only, max 50 characters"
+    );
+  }
+
+  // Check unique branch name within project
+  const existing = await db
+    .select({ id: projectBranches.id })
+    .from(projectBranches)
+    .where(
+      and(eq(projectBranches.projectId, params.projectId), eq(projectBranches.name, sanitized))
+    )
+    .limit(1);
+
+  if (existing.length > 0) {
+    throw new ConflictError(`Branch '${sanitized}' already exists in this project`);
+  }
+
+  let headSnapshotId = project.currentSnapshotId;
+  if (params.fromSnapshotId) {
+    const snapRows = await db
+      .select({ id: snapshots.id })
+      .from(snapshots)
+      .where(
+        and(eq(snapshots.id, params.fromSnapshotId), eq(snapshots.projectId, params.projectId))
+      )
+      .limit(1);
+    if (snapRows.length === 0) {
+      throw new NotFoundError(`Source snapshot ${params.fromSnapshotId} not found in this project`);
+    }
+    headSnapshotId = snapRows[0]?.id ?? null;
+  }
+
+  const branchRows = await db
+    .insert(projectBranches)
+    .values({
+      projectId: params.projectId,
+      name: sanitized,
+      headSnapshotId,
+    })
+    .returning();
+
+  const branch = branchRows[0];
+  if (!branch) {
+    throw new Error("Failed to insert project branch");
+  }
+
+  if (params.switchActive) {
+    await db
+      .update(projects)
+      .set({
+        activeBranchId: branch.id,
+        currentSnapshotId: headSnapshotId,
+        updatedAt: new Date(),
+      })
+      .where(eq(projects.id, params.projectId));
+  }
+
+  return branch;
+}
+
+export async function switchBranch(
+  db: DatabaseClient,
+  params: { projectId: string; userId: string; branchId: string }
+): Promise<{
+  activeBranch: BranchWithStatus;
+  currentSnapshotId: string | null;
+  files: SnapshotFilesMap;
+}> {
+  const projectRows = await db
+    .select({ id: projects.id, userId: projects.userId })
+    .from(projects)
+    .where(eq(projects.id, params.projectId))
+    .limit(1);
+
+  const project = projectRows[0];
+  if (!project) {
+    throw new NotFoundError(`Project ${params.projectId} not found`);
+  }
+
+  if (project.userId !== params.userId) {
+    throw new ForbiddenError("You do not have access to this project");
+  }
+
+  const branchRows = await db
+    .select()
+    .from(projectBranches)
+    .where(
+      and(eq(projectBranches.id, params.branchId), eq(projectBranches.projectId, params.projectId))
+    )
+    .limit(1);
+
+  const branch = branchRows[0];
+  if (!branch) {
+    throw new NotFoundError(`Branch ${params.branchId} not found in this project`);
+  }
+
+  await db
+    .update(projects)
+    .set({
+      activeBranchId: branch.id,
+      currentSnapshotId: branch.headSnapshotId,
+      updatedAt: new Date(),
+    })
+    .where(eq(projects.id, params.projectId));
+
+  let files: SnapshotFilesMap = {};
+  if (branch.headSnapshotId) {
+    const snapRows = await db
+      .select({ files: snapshots.files })
+      .from(snapshots)
+      .where(eq(snapshots.id, branch.headSnapshotId))
+      .limit(1);
+    if (snapRows[0]?.files) {
+      files = snapRows[0].files;
+    }
+  }
+
+  return {
+    activeBranch: {
+      ...branch,
+      isMain: branch.name === "main",
+      isActive: true,
+    },
+    currentSnapshotId: branch.headSnapshotId,
+    files,
+  };
+}
+
+export async function deleteBranch(
+  db: DatabaseClient,
+  params: { projectId: string; userId: string; branchId: string }
+): Promise<{ success: true }> {
+  const projectRows = await db
+    .select({ id: projects.id, userId: projects.userId, activeBranchId: projects.activeBranchId })
+    .from(projects)
+    .where(eq(projects.id, params.projectId))
+    .limit(1);
+
+  const project = projectRows[0];
+  if (!project) {
+    throw new NotFoundError(`Project ${params.projectId} not found`);
+  }
+
+  if (project.userId !== params.userId) {
+    throw new ForbiddenError("You do not have access to this project");
+  }
+
+  const branchRows = await db
+    .select()
+    .from(projectBranches)
+    .where(
+      and(eq(projectBranches.id, params.branchId), eq(projectBranches.projectId, params.projectId))
+    )
+    .limit(1);
+
+  const branch = branchRows[0];
+  if (!branch) {
+    throw new NotFoundError(`Branch ${params.branchId} not found in this project`);
+  }
+
+  if (branch.name === "main") {
+    throw new ValidationError("Cannot delete the default main branch");
+  }
+
+  if (project.activeBranchId === branch.id) {
+    throw new ValidationError("Cannot delete the currently active branch");
+  }
+
+  await db.delete(projectBranches).where(eq(projectBranches.id, branch.id));
+
+  return { success: true };
+}
+
+export interface RollbackSnapshotParams {
+  projectId: string;
+  userId: string;
+  snapshotId: string;
+  message?: string;
+}
+
+export async function rollbackSnapshot(
+  db: DatabaseClient,
+  params: RollbackSnapshotParams
+): Promise<{
+  snapshot: Snapshot;
+  targetSnapshot: Snapshot;
+  activeBranch: ProjectBranch;
+}> {
+  const projectRows = await db
+    .select({
+      id: projects.id,
+      userId: projects.userId,
+      activeBranchId: projects.activeBranchId,
+      currentSnapshotId: projects.currentSnapshotId,
+    })
+    .from(projects)
+    .where(eq(projects.id, params.projectId))
+    .limit(1);
+
+  const project = projectRows[0];
+  if (!project) {
+    throw new NotFoundError(`Project ${params.projectId} not found`);
+  }
+
+  if (project.userId !== params.userId) {
+    throw new ForbiddenError("You do not have access to this project");
+  }
+
+  // Guard: rollback blocked during active generation runs (AC-8)
+  const isStreaming = await checkActiveGeneration(db, { projectId: params.projectId });
+  if (isStreaming) {
+    throw new ConflictError("Cannot roll back while generation is in progress");
+  }
+
+  const targetSnapshotRows = await db
+    .select()
+    .from(snapshots)
+    .where(and(eq(snapshots.id, params.snapshotId), eq(snapshots.projectId, params.projectId)))
+    .limit(1);
+
+  const targetSnapshot = targetSnapshotRows[0];
+  if (!targetSnapshot) {
+    throw new NotFoundError(`Snapshot ${params.snapshotId} not found in this project`);
+  }
+
+  // Resolve active branch
+  let activeBranchId = project.activeBranchId;
+  let activeBranch: ProjectBranch | undefined;
+  if (activeBranchId) {
+    const branchRows = await db
+      .select()
+      .from(projectBranches)
+      .where(eq(projectBranches.id, activeBranchId))
+      .limit(1);
+    activeBranch = branchRows[0];
+  }
+
+  if (!activeBranch) {
+    const mainRows = await db
+      .select()
+      .from(projectBranches)
+      .where(and(eq(projectBranches.projectId, params.projectId), eq(projectBranches.name, "main")))
+      .limit(1);
+    if (mainRows[0]) {
+      activeBranch = mainRows[0];
+    } else {
+      const createdMain = await db
+        .insert(projectBranches)
+        .values({
+          projectId: params.projectId,
+          name: "main",
+          headSnapshotId: project.currentSnapshotId,
+        })
+        .returning();
+      activeBranch = createdMain[0];
+    }
+    activeBranchId = activeBranch?.id;
+  }
+
+  const rollbackMessage =
+    params.message?.trim() || `Rollback to snapshot ${targetSnapshot.id.slice(0, 8)}`;
+  const treeHash = computeSnapshotTreeHash(targetSnapshot.files);
+  const fileCount = Object.keys(targetSnapshot.files).length;
+
+  // Non destructive forward commit: creating a new snapshot with historical files (AC-7)
+  const snapshotRows = await db
+    .insert(snapshots)
+    .values({
+      projectId: params.projectId,
+      parentId: project.currentSnapshotId,
+      branchId: activeBranchId,
+      branchName: activeBranch?.name ?? "main",
+      treeHash,
+      files: targetSnapshot.files,
+      fileCount,
+      message: rollbackMessage,
+      trigger: "rollback",
+      restoredFromSnapshotId: targetSnapshot.id,
+    })
+    .returning();
+
+  const newSnapshot = snapshotRows[0];
+  if (!newSnapshot) {
+    throw new Error("Failed to create rollback snapshot");
+  }
+
+  // Update active branch head and project pointers atomically
+  if (activeBranchId) {
+    await db
+      .update(projectBranches)
+      .set({
+        headSnapshotId: newSnapshot.id,
+        updatedAt: new Date(),
+      })
+      .where(eq(projectBranches.id, activeBranchId));
+  }
+
+  await db
+    .update(projects)
+    .set({
+      currentSnapshotId: newSnapshot.id,
+      activeBranchId,
+      updatedAt: new Date(),
+    })
+    .where(eq(projects.id, params.projectId));
+
+  if (!activeBranch) {
+    throw new ValidationError("Active branch not found");
+  }
+
+  return {
+    snapshot: newSnapshot,
+    targetSnapshot,
+    activeBranch,
+  };
 }
 
 export interface RecordPromptMessageParams {

@@ -7,6 +7,8 @@ import type {
   PreviewErrorPayload,
   ProjectFile,
   SelectedElementState,
+  SnapshotFilesMap,
+  SnapshotSummary,
 } from "@spark/shared";
 import { Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -15,6 +17,12 @@ import {
   PreviewErrorBanner,
   PromptComposer,
 } from "@/components/generation";
+import {
+  BranchSwitcher,
+  CreateBranchDialog,
+  InspectModeBanner,
+  VersionHistoryDrawer,
+} from "@/components/history";
 import { InspectorPanel } from "@/components/inspector";
 import {
   BuilderShell,
@@ -27,6 +35,23 @@ import { Badge } from "@/components/ui/badge";
 import { useGenerationLoop } from "@/hooks/useGenerationLoop";
 import { usePreviewBridge } from "@/hooks/usePreviewBridge";
 import { useProjectFiles } from "@/hooks/useProjectFiles";
+import { useVersionHistory } from "@/hooks/useVersionHistory";
+
+function parseDependencies(pkgContent?: string): Record<string, string> {
+  if (!pkgContent) return {};
+  try {
+    const parsed = JSON.parse(pkgContent);
+    return { ...parsed.dependencies, ...parsed.devDependencies };
+  } catch {
+    return {};
+  }
+}
+
+function areDependenciesEqual(pkgA?: string, pkgB?: string): boolean {
+  const depsA = JSON.stringify(parseDependencies(pkgA));
+  const depsB = JSON.stringify(parseDependencies(pkgB));
+  return depsA === depsB;
+}
 
 export default function BuilderPage() {
   const [projectId] = useState("00000000-0000-0000-0000-000000000001");
@@ -43,6 +68,10 @@ export default function BuilderPage() {
         "Welcome to sparkweb! Describe the application you want to build in plain words, or select one of the suggestions below.",
     },
   ]);
+
+  const [isCreateBranchOpen, setIsCreateBranchOpen] = useState(false);
+  const [branchSourceSnapshotId, setBranchSourceSnapshotId] = useState<string | null>(null);
+  const [branchSourceMessage, setBranchSourceMessage] = useState<string | null>(null);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const sandboxUrl = process.env.NEXT_PUBLIC_SANDBOX_URL || "/sandbox/runner";
@@ -70,6 +99,7 @@ export default function BuilderPage() {
 
   const {
     files,
+    setFiles,
     selectedElement,
     setSelectedElement,
     isInspectMode,
@@ -77,6 +107,7 @@ export default function BuilderPage() {
     applyStyleUpdate,
     applyTextUpdate,
     updateFileContent,
+    hasUnsavedCanvasChanges,
     undo,
     redo,
     canUndo,
@@ -90,6 +121,68 @@ export default function BuilderPage() {
     },
     onSendBridgeMessage: (type, payload) => {
       sendToPreview(type as BridgeMessageType, payload);
+    },
+  });
+
+  const versionHistory = useVersionHistory({
+    projectId,
+    isStreaming: false,
+    hasUnsavedCanvasChanges,
+    onInspectFiles: (historicalFiles) => {
+      const filesList = Object.entries(historicalFiles).map(([path, entry]) => ({
+        path,
+        content: entry.content,
+      }));
+      sendToPreview("PREVIEW_WRITE_FILES", { files: filesList });
+    },
+    onExitInspect: () => {
+      const filesList = Object.entries(files).map(([path, entry]) => ({
+        path,
+        content: entry.content,
+      }));
+      sendToPreview("PREVIEW_WRITE_FILES", { files: filesList });
+    },
+    onRollbackComplete: (restoredFiles: SnapshotFilesMap, snapshot: SnapshotSummary) => {
+      // Preview reload optimization: if dependencies differ, boot cleanly; else hot reload (AC-7)
+      const currentPkg = files["package.json"]?.content;
+      const restoredPkg = restoredFiles["package.json"]?.content;
+      const depsEqual = areDependenciesEqual(currentPkg, restoredPkg);
+
+      if (!depsEqual) {
+        sendToPreview("PREVIEW_BOOT", { files: restoredFiles });
+      } else {
+        const filesList = Object.entries(restoredFiles).map(([path, entry]) => ({
+          path,
+          content: entry.content,
+        }));
+        sendToPreview("PREVIEW_WRITE_FILES", { files: filesList });
+      }
+
+      setFiles(restoredFiles);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: String(Date.now()),
+          role: "assistant",
+          content: `Rolled back to snapshot ${snapshot.id.slice(0, 8)}. Preview updated to restored application state.`,
+        },
+      ]);
+    },
+    onBranchSwitched: (newFiles: SnapshotFilesMap, branch) => {
+      const filesList = Object.entries(newFiles).map(([path, entry]) => ({
+        path,
+        content: entry.content,
+      }));
+      sendToPreview("PREVIEW_WRITE_FILES", { files: filesList });
+      setFiles(newFiles);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: String(Date.now()),
+          role: "assistant",
+          content: `Switched active branch to ${branch.name}. Loaded branch head code tree.`,
+        },
+      ]);
     },
   });
 
@@ -185,9 +278,26 @@ export default function BuilderPage() {
   };
 
   return (
-    <BuilderShell projectName="Demo Application">
+    <BuilderShell
+      projectName="Demo Application"
+      branchSwitcher={
+        <BranchSwitcher
+          branches={versionHistory.branches}
+          activeBranchId={versionHistory.activeBranchId}
+          onSwitchBranch={versionHistory.switchBranch}
+          onCreateBranchClick={() => {
+            setBranchSourceSnapshotId(null);
+            setBranchSourceMessage(null);
+            setIsCreateBranchOpen(true);
+          }}
+          onDeleteBranchClick={versionHistory.deleteBranch}
+        />
+      }
+    >
       <BuilderWorkbench
-        isInspectorOpen={isInspectMode || Boolean(selectedElement)}
+        isInspectorOpen={
+          !versionHistory.isInspectMode && (isInspectMode || Boolean(selectedElement))
+        }
         onToggleInspector={handleToggleInspect}
         inspectorContent={
           <InspectorPanel
@@ -245,40 +355,52 @@ export default function BuilderPage() {
 
               {/* Input Area with Quick Prompts & Composer */}
               <div className="space-y-3 pt-2 border-t border-border/40">
-                {!isStreaming && (
-                  <div className="flex flex-wrap gap-1.5">
-                    <Badge
-                      variant="outline"
-                      className="cursor-pointer hover:bg-accent text-xs font-normal transition"
-                      onClick={() =>
-                        handlePromptSubmit(
-                          "Build a task manager with categories, filter tabs, and status badges",
-                          "claude-3-7-sonnet"
-                        )
-                      }
-                    >
-                      + Task manager app
-                    </Badge>
-                    <Badge
-                      variant="outline"
-                      className="cursor-pointer hover:bg-accent text-xs font-normal transition"
-                      onClick={() =>
-                        handlePromptSubmit(
-                          "Create an interactive analytics revenue card with monthly growth metric",
-                          "claude-3-7-sonnet"
-                        )
-                      }
-                    >
-                      + Analytics card
-                    </Badge>
+                {versionHistory.isInspectMode ? (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-200">
+                    <p className="font-semibold mb-1">Inspect Mode Active</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      Prompt submission and canvas direct edits are locked while inspecting
+                      historical versions. Exit inspection or restore this version to make changes.
+                    </p>
                   </div>
-                )}
+                ) : (
+                  <>
+                    {!isStreaming && (
+                      <div className="flex flex-wrap gap-1.5">
+                        <Badge
+                          variant="outline"
+                          className="cursor-pointer hover:bg-accent text-xs font-normal transition"
+                          onClick={() =>
+                            handlePromptSubmit(
+                              "Build a task manager with categories, filter tabs, and status badges",
+                              "claude-3-7-sonnet"
+                            )
+                          }
+                        >
+                          + Task manager app
+                        </Badge>
+                        <Badge
+                          variant="outline"
+                          className="cursor-pointer hover:bg-accent text-xs font-normal transition"
+                          onClick={() =>
+                            handlePromptSubmit(
+                              "Create an interactive analytics revenue card with monthly growth metric",
+                              "claude-3-7-sonnet"
+                            )
+                          }
+                        >
+                          + Analytics card
+                        </Badge>
+                      </div>
+                    )}
 
-                <PromptComposer
-                  onSubmit={handlePromptSubmit}
-                  onCancel={cancelGeneration}
-                  isStreaming={isStreaming}
-                />
+                    <PromptComposer
+                      onSubmit={handlePromptSubmit}
+                      onCancel={cancelGeneration}
+                      isStreaming={isStreaming}
+                    />
+                  </>
+                )}
               </div>
             </div>
           </ChatPanel>
@@ -295,7 +417,37 @@ export default function BuilderPage() {
               sandboxUrl={sandboxUrl}
               isInspectMode={isInspectMode}
               onToggleInspect={handleToggleInspect}
+              isHistoryOpen={versionHistory.isDrawerOpen}
+              onToggleHistory={versionHistory.toggleDrawer}
             />
+
+            {/* Inspect Mode Banner (AC-6) */}
+            {versionHistory.isInspectMode && versionHistory.inspectSnapshotId && (
+              <InspectModeBanner
+                snapshotId={versionHistory.inspectSnapshotId}
+                snapshotMessage={
+                  versionHistory.snapshots.find((s) => s.id === versionHistory.inspectSnapshotId)
+                    ?.message
+                }
+                onRestore={() => {
+                  if (versionHistory.inspectSnapshotId) {
+                    versionHistory.executeRollback(versionHistory.inspectSnapshotId);
+                  }
+                }}
+                onBranchFromHere={() => {
+                  if (versionHistory.inspectSnapshotId) {
+                    const snap = versionHistory.snapshots.find(
+                      (s) => s.id === versionHistory.inspectSnapshotId
+                    );
+                    setBranchSourceSnapshotId(versionHistory.inspectSnapshotId);
+                    setBranchSourceMessage(snap?.message || null);
+                    setIsCreateBranchOpen(true);
+                  }
+                }}
+                onExit={versionHistory.exitInspectMode}
+                isRollingBack={versionHistory.isRollingBack}
+              />
+            )}
 
             {previewError && (
               <div className="p-3 bg-muted/40 border-b border-border">
@@ -328,6 +480,58 @@ export default function BuilderPage() {
             />
           </div>
         }
+      />
+
+      {/* Version History Sliding Drawer (AC-5, AC-6) */}
+      <VersionHistoryDrawer
+        isOpen={versionHistory.isDrawerOpen}
+        onClose={versionHistory.closeDrawer}
+        snapshots={versionHistory.filteredSnapshots}
+        activeSnapshotId={
+          versionHistory.activeBranchId
+            ? versionHistory.branches.find((b) => b.id === versionHistory.activeBranchId)
+                ?.headSnapshotId
+            : null
+        }
+        inspectSnapshotId={versionHistory.inspectSnapshotId}
+        inspectDiff={versionHistory.inspectDiff}
+        isLoadingSnapshots={versionHistory.isLoadingSnapshots}
+        isLoadingDiff={versionHistory.isLoadingDiff}
+        nextCursor={versionHistory.nextCursor}
+        onLoadMore={versionHistory.loadMoreSnapshots}
+        onInspectSnapshot={versionHistory.enterInspectMode}
+        onExitInspect={versionHistory.exitInspectMode}
+        onRollbackSnapshot={(id) => versionHistory.executeRollback(id)}
+        onBranchFromSnapshot={(id, msg) => {
+          setBranchSourceSnapshotId(id);
+          setBranchSourceMessage(msg);
+          setIsCreateBranchOpen(true);
+        }}
+        onSaveCheckpoint={(msg, tag) => versionHistory.createManualCheckpoint(files, msg, tag)}
+        searchQuery={versionHistory.searchQuery}
+        onSearchQueryChange={versionHistory.setSearchQuery}
+        selectedTriggerFilter={versionHistory.selectedTriggerFilter}
+        onTriggerFilterChange={versionHistory.setSelectedTriggerFilter}
+      />
+
+      {/* Create Branch Modal (AC-4) */}
+      <CreateBranchDialog
+        isOpen={isCreateBranchOpen}
+        onClose={() => {
+          setIsCreateBranchOpen(false);
+          setBranchSourceSnapshotId(null);
+          setBranchSourceMessage(null);
+        }}
+        onSubmit={async (name, switchActive) => {
+          const b = await versionHistory.createBranch(
+            name,
+            branchSourceSnapshotId || undefined,
+            switchActive
+          );
+          return Boolean(b);
+        }}
+        fromSnapshotId={branchSourceSnapshotId}
+        fromSnapshotMessage={branchSourceMessage}
       />
     </BuilderShell>
   );

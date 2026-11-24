@@ -67,4 +67,17 @@ describe("BuilderPage Component", () => {
 
     expect(screen.getAllByText("Build a customer feedback form").length).toBeGreaterThan(0);
   });
+
+  it("renders branch switcher and version history toggle in toolbar (AC-4, AC-5)", () => {
+    render(<BuilderPage />);
+
+    expect(screen.getByRole("button", { name: "Switch active branch" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open version history" })).toBeInTheDocument();
+
+    const historyBtn = screen.getByRole("button", { name: "Open version history" });
+    fireEvent.click(historyBtn);
+
+    expect(screen.getByRole("dialog", { name: "Version history snapshots" })).toBeInTheDocument();
+    expect(screen.getByText("Version History")).toBeInTheDocument();
+  });
 });

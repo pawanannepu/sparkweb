@@ -1,4 +1,15 @@
-import { and, db, eq, projects, promptMessages, saveSnapshot } from "@spark/db";
+import {
+  and,
+  db,
+  eq,
+  ForbiddenError,
+  getPaginatedSnapshots,
+  NotFoundError,
+  projects,
+  promptMessages,
+  type SnapshotTrigger,
+  saveSnapshot,
+} from "@spark/db";
 import { filterSourceFiles } from "@spark/sandbox";
 import type { HealingTelemetry, SnapshotFilesMap } from "@spark/shared";
 import { type NextRequest, NextResponse } from "next/server";
@@ -6,6 +17,51 @@ import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
+
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id: projectId } = await params;
+
+  const user = await getCurrentUser(req);
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { searchParams } = new URL(req.url);
+  const branchId = searchParams.get("branchId") || undefined;
+  const cursor = searchParams.get("cursor") || undefined;
+  const rawLimit = searchParams.get("limit");
+  const limit = rawLimit ? Number.parseInt(rawLimit, 10) : undefined;
+
+  try {
+    const result = await getPaginatedSnapshots(db, {
+      projectId,
+      userId: user.id,
+      branchId,
+      cursor,
+      limit,
+    });
+
+    return NextResponse.json({
+      items: result.items.map((item) => ({
+        ...item,
+        createdAt: item.createdAt.toISOString(),
+      })),
+      nextCursor: result.nextCursor,
+    });
+  } catch (err: unknown) {
+    const errorObj = err as Error;
+    if (errorObj instanceof NotFoundError) {
+      return NextResponse.json({ error: errorObj.message }, { status: 404 });
+    }
+    if (errorObj instanceof ForbiddenError) {
+      return NextResponse.json({ error: errorObj.message }, { status: 403 });
+    }
+    return NextResponse.json(
+      { error: "Failed to list snapshots", message: errorObj.message },
+      { status: 500 }
+    );
+  }
+}
 
 const createSnapshotSchema = z.object({
   files: z.record(
@@ -17,6 +73,10 @@ const createSnapshotSchema = z.object({
   ),
   message: z.string().optional(),
   messageId: z.string().optional(),
+  branchId: z.string().optional(),
+  trigger: z.enum(["generation", "canvas", "repair", "manual", "rollback"]).optional(),
+  tag: z.string().optional(),
+  restoredFromSnapshotId: z.string().optional(),
   healingTelemetry: z.custom<HealingTelemetry>().optional(),
   status: z.enum(["healed", "clean", "exhausted"]).optional(),
 });
@@ -46,7 +106,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     );
   }
 
-  const { files, message, messageId, healingTelemetry, status } = parsed.data;
+  const {
+    files,
+    message,
+    messageId,
+    branchId,
+    trigger,
+    tag,
+    restoredFromSnapshotId,
+    healingTelemetry,
+    status,
+  } = parsed.data;
 
   // 3. Verify project ownership
   const projectRows = await db
@@ -75,6 +145,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       userId: user.id,
       files: cleanFiles,
       message: snapshotMessage,
+      branchId,
+      trigger: trigger as SnapshotTrigger | undefined,
+      tag,
+      restoredFromSnapshotId,
       parentId: project.currentSnapshotId || undefined,
     });
 
@@ -103,10 +177,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         .where(eq(promptMessages.id, messageId));
     }
 
+    const createdDate =
+      snapshot.createdAt instanceof Date ? snapshot.createdAt : new Date(snapshot.createdAt);
+
     return NextResponse.json({
       id: snapshot.id,
       treeHash: snapshot.treeHash,
-      createdAt: snapshot.createdAt,
+      fileCount: snapshot.fileCount ?? 0,
+      trigger: snapshot.trigger ?? "generation",
+      tag: snapshot.tag ?? null,
+      createdAt: createdDate.toISOString(),
     });
   } catch (err: unknown) {
     const errorObj = err as Error;

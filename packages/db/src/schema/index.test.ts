@@ -4,6 +4,7 @@ import {
   accounts,
   apiKeys,
   deployments,
+  projectBranches,
   projects,
   promptMessages,
   promptThreads,
@@ -71,6 +72,7 @@ describe("db schema definitions", () => {
     expect(columns.isTemplate).toBeDefined();
     expect(columns.forkedFromProjectId).toBeDefined();
     expect(columns.currentSnapshotId).toBeDefined();
+    expect(columns.activeBranchId).toBeDefined();
     expect(columns.createdAt).toBeDefined();
     expect(columns.updatedAt).toBeDefined();
   });
@@ -97,11 +99,26 @@ describe("db schema definitions", () => {
     expect(columns.id).toBeDefined();
     expect(columns.projectId).toBeDefined();
     expect(columns.parentId).toBeDefined();
+    expect(columns.branchId).toBeDefined();
     expect(columns.branchName).toBeDefined();
     expect(columns.treeHash).toBeDefined();
     expect(columns.files).toBeDefined();
+    expect(columns.fileCount).toBeDefined();
     expect(columns.message).toBeDefined();
+    expect(columns.trigger).toBeDefined();
+    expect(columns.tag).toBeDefined();
+    expect(columns.restoredFromSnapshotId).toBeDefined();
     expect(columns.createdAt).toBeDefined();
+  });
+
+  it("defines project_branches table with unique constraint on projectId and name", () => {
+    const columns = getTableColumns(projectBranches);
+    expect(columns.id).toBeDefined();
+    expect(columns.projectId).toBeDefined();
+    expect(columns.name).toBeDefined();
+    expect(columns.headSnapshotId).toBeDefined();
+    expect(columns.createdAt).toBeDefined();
+    expect(columns.updatedAt).toBeDefined();
   });
 
   it("defines deployments table with subdomain and deploymentUrl", () => {

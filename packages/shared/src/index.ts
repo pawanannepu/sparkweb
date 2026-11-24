@@ -215,3 +215,71 @@ export interface GenerationPlan {
   provider: string;
   totalTokens?: number;
 }
+
+export type SnapshotTrigger = "generation" | "canvas" | "repair" | "manual" | "rollback";
+
+export interface SnapshotSummary {
+  id: string;
+  projectId: string;
+  parentId: string | null;
+  branchId: string | null;
+  branchName: string;
+  treeHash: string;
+  fileCount: number;
+  message: string | null;
+  trigger: SnapshotTrigger;
+  tag: string | null;
+  restoredFromSnapshotId: string | null;
+  createdAt: string;
+}
+
+export interface BranchSummary {
+  id: string;
+  projectId: string;
+  name: string;
+  headSnapshotId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  isMain?: boolean;
+  isActive?: boolean;
+}
+
+export type FileDiffStatus = "added" | "modified" | "deleted";
+
+export interface DiffHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[];
+}
+
+export interface FileDiff {
+  path: string;
+  status: FileDiffStatus;
+  isBinary: boolean;
+  additions: number;
+  deletions: number;
+  hunks: DiffHunk[];
+}
+
+export interface SnapshotDiffSummary {
+  totalFiles: number;
+  addedFiles: number;
+  modifiedFiles: number;
+  deletedFiles: number;
+  totalAdditions: number;
+  totalDeletions: number;
+}
+
+export interface SnapshotDiffResult {
+  baseSnapshotId: string | null;
+  targetSnapshotId: string;
+  summary: SnapshotDiffSummary;
+  fileDiffs: FileDiff[];
+}
+
+export interface PaginatedSnapshotsResponse {
+  items: SnapshotSummary[];
+  nextCursor: string | null;
+}

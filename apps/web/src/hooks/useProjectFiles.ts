@@ -28,6 +28,7 @@ export function useProjectFiles({
   const [files, setFilesState] = useState<SnapshotFilesMap>(initialFiles);
   const [selectedElement, setSelectedElement] = useState<SelectedElementState | null>(null);
   const [isInspectMode, setIsInspectModeState] = useState(false);
+  const [hasUnsavedCanvasChanges, setHasUnsavedCanvasChanges] = useState(false);
 
   // Undo / Redo history stack
   const [history, setHistory] = useState<CanvasHistoryStack>({
@@ -100,6 +101,8 @@ export function useProjectFiles({
     }
     if (isStreamingRef.current) return;
 
+    setHasUnsavedCanvasChanges(true);
+
     autoSaveTimeoutRef.current = setTimeout(async () => {
       if (isStreamingRef.current) return;
       try {
@@ -109,13 +112,44 @@ export function useProjectFiles({
           body: JSON.stringify({
             files: filesRef.current,
             message: "Visual canvas direct styling update",
+            trigger: "canvas",
           }),
         });
+        setHasUnsavedCanvasChanges(false);
       } catch (err) {
         console.warn("Auto save snapshot error:", err);
       }
     }, 3000);
   }, [projectId]);
+
+  const flushPendingSave = useCallback(async () => {
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+      autoSaveTimeoutRef.current = null;
+    }
+    try {
+      await fetch(`/api/projects/${projectId}/snapshots`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          files: filesRef.current,
+          message: "Visual canvas direct styling update",
+          trigger: "canvas",
+        }),
+      });
+      setHasUnsavedCanvasChanges(false);
+    } catch (err) {
+      console.warn("Flush pending save error:", err);
+    }
+  }, [projectId]);
+
+  const discardPendingSave = useCallback(() => {
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+      autoSaveTimeoutRef.current = null;
+    }
+    setHasUnsavedCanvasChanges(false);
+  }, []);
 
   // Record an updated file and handle debounced file write
   const updateFileContent = useCallback(
@@ -320,6 +354,9 @@ export function useProjectFiles({
     applyStyleUpdate,
     applyTextUpdate,
     updateFileContent,
+    hasUnsavedCanvasChanges,
+    flushPendingSave,
+    discardPendingSave,
     undo,
     redo,
     canUndo: history.past.length > 0,

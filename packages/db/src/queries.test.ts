@@ -10,17 +10,24 @@ import {
 } from "./errors";
 import { runPgliteMigrations } from "./migrate";
 import {
+  createBranch,
   createDeployment,
   createProject,
+  deleteBranch,
   deleteSnapshot,
   getDecryptedApiKey,
+  getPaginatedSnapshots,
+  getProjectBranches,
   getProjectSnapshots,
   getProjectWithCurrentSnapshot,
+  getSnapshotById,
   getUserApiKeys,
   recordPromptMessage,
+  rollbackSnapshot,
   saveSnapshot,
   saveUserApiKey,
   slugify,
+  switchBranch,
   updatePromptMessage,
 } from "./queries";
 import { users } from "./schema/index";
@@ -509,6 +516,238 @@ describe("db queries and migration integration with PGlite", () => {
           { userId: userAId, provider: "non-existent-provider" },
           testMasterKey
         )
+      ).rejects.toThrow(NotFoundError);
+    });
+
+    it("creates default main branch and supports branch lifecycle and switching (AC-1, AC-4)", async () => {
+      const project = await createProject(testDb, {
+        userId: userAId,
+        name: "Branch Lifecycle App",
+      });
+
+      // Default main branch exists and is active
+      const branchesRes = await getProjectBranches(testDb, {
+        projectId: project.id,
+        userId: userAId,
+      });
+      expect(branchesRes.branches).toHaveLength(1);
+      expect(branchesRes.branches[0]?.name).toBe("main");
+      expect(branchesRes.branches[0]?.isMain).toBe(true);
+      expect(branchesRes.branches[0]?.isActive).toBe(true);
+
+      // Create snapshot on main
+      const snapMain = await saveSnapshot(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        files: { "main.txt": { content: "main content" } },
+        trigger: "generation",
+        tag: "v1.0",
+      });
+      expect(snapMain.fileCount).toBe(1);
+      expect(snapMain.trigger).toBe("generation");
+      expect(snapMain.tag).toBe("v1.0");
+
+      // Create new branch from current snapshot
+      const expBranch = await createBranch(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        name: "experiment-ui",
+        switchActive: true,
+      });
+      expect(expBranch.name).toBe("experiment-ui");
+      expect(expBranch.headSnapshotId).toBe(snapMain.id);
+
+      // Verify active branch changed
+      const branchesAfter = await getProjectBranches(testDb, {
+        projectId: project.id,
+        userId: userAId,
+      });
+      expect(branchesAfter.branches).toHaveLength(2);
+      const activeBranch = branchesAfter.branches.find((b) => b.isActive);
+      expect(activeBranch?.name).toBe("experiment-ui");
+
+      // Commit changes on experimental branch
+      const snapExp = await saveSnapshot(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        files: {
+          "main.txt": { content: "main content" },
+          "exp.txt": { content: "experiment content" },
+        },
+        trigger: "canvas",
+      });
+      expect(snapExp.fileCount).toBe(2);
+      expect(snapExp.branchId).toBe(expBranch.id);
+
+      // Switch back to main
+      const mainBranch = branchesAfter.branches.find((b) => b.isMain);
+      expect(mainBranch).toBeDefined();
+      const mainBranchId = mainBranch?.id ?? "";
+      const switched = await switchBranch(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        branchId: mainBranchId,
+      });
+      expect(switched.activeBranch.name).toBe("main");
+      expect(switched.files["exp.txt"]).toBeUndefined();
+      expect(switched.files["main.txt"]?.content).toBe("main content");
+
+      // Cannot delete main branch
+      await expect(
+        deleteBranch(testDb, {
+          projectId: project.id,
+          userId: userAId,
+          branchId: mainBranchId,
+        })
+      ).rejects.toThrow(ValidationError);
+
+      // Can delete non-active experimental branch
+      const deleteResult = await deleteBranch(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        branchId: expBranch.id,
+      });
+      expect(deleteResult.success).toBe(true);
+    });
+
+    it("paginates snapshots with opaque cursor and limits (AC-2)", async () => {
+      const project = await createProject(testDb, {
+        userId: userAId,
+        name: "Pagination Test App",
+      });
+
+      // Insert 5 snapshots
+      for (let i = 1; i <= 5; i++) {
+        await saveSnapshot(testDb, {
+          projectId: project.id,
+          userId: userAId,
+          files: { [`file${i}.txt`]: { content: `content ${i}` } },
+          message: `Snapshot ${i}`,
+        });
+      }
+
+      // Page 1 (limit 2)
+      const page1 = await getPaginatedSnapshots(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        limit: 2,
+      });
+      expect(page1.items).toHaveLength(2);
+      expect(page1.items[0]?.message).toBe("Snapshot 5");
+      expect(page1.items[1]?.message).toBe("Snapshot 4");
+      expect(page1.nextCursor).toBeDefined();
+
+      // Page 2
+      expect(page1.nextCursor).toBeDefined();
+      const cursor1 = page1.nextCursor ?? "";
+      const page2 = await getPaginatedSnapshots(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        cursor: cursor1,
+        limit: 2,
+      });
+      expect(page2.items).toHaveLength(2);
+      expect(page2.items[0]?.message).toBe("Snapshot 3");
+      expect(page2.items[1]?.message).toBe("Snapshot 2");
+      expect(page2.nextCursor).toBeDefined();
+
+      // Page 3
+      const cursor2 = page2.nextCursor ?? "";
+      const page3 = await getPaginatedSnapshots(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        cursor: cursor2,
+        limit: 2,
+      });
+      expect(page3.items).toHaveLength(1);
+      expect(page3.items[0]?.message).toBe("Snapshot 1");
+      expect(page3.nextCursor).toBeNull();
+    });
+
+    it("performs non-destructive forward rollback and blocks during streaming (AC-7, AC-8)", async () => {
+      const project = await createProject(testDb, {
+        userId: userAId,
+        name: "Rollback Test App",
+      });
+
+      const snap1 = await saveSnapshot(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        files: { "app.tsx": { content: "version 1" } },
+        message: "Version 1",
+      });
+
+      const snap2 = await saveSnapshot(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        files: { "app.tsx": { content: "version 2" } },
+        message: "Version 2",
+      });
+
+      // Rollback to snap1
+      const rollbackRes = await rollbackSnapshot(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        snapshotId: snap1.id,
+      });
+
+      expect(rollbackRes.snapshot.id).not.toBe(snap1.id);
+      expect(rollbackRes.snapshot.id).not.toBe(snap2.id);
+      expect(rollbackRes.snapshot.trigger).toBe("rollback");
+      expect(rollbackRes.snapshot.restoredFromSnapshotId).toBe(snap1.id);
+      expect(rollbackRes.snapshot.files).toEqual(snap1.files);
+
+      // Verify full snapshot retrieval
+      const fetched = await getSnapshotById(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        snapshotId: rollbackRes.snapshot.id,
+      });
+      expect(fetched.files).toEqual(snap1.files);
+
+      // Rollback to non-existent snapshot throws NotFoundError
+      await expect(
+        rollbackSnapshot(testDb, {
+          projectId: project.id,
+          userId: userAId,
+          snapshotId: "00000000-0000-0000-0000-000000000099",
+        })
+      ).rejects.toThrow(NotFoundError);
+    });
+
+    it("prevents duplicate branch names on the same project (AC-1)", async () => {
+      const project = await createProject(testDb, {
+        userId: userAId,
+        name: "Duplicate Branch App",
+      });
+
+      await createBranch(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        name: "duplicate-name",
+      });
+
+      await expect(
+        createBranch(testDb, {
+          projectId: project.id,
+          userId: userAId,
+          name: "duplicate-name",
+        })
+      ).rejects.toThrow(ConflictError);
+    });
+
+    it("throws NotFoundError when switching to non-existent branch", async () => {
+      const project = await createProject(testDb, {
+        userId: userAId,
+        name: "Switch Error App",
+      });
+
+      await expect(
+        switchBranch(testDb, {
+          projectId: project.id,
+          userId: userAId,
+          branchId: "00000000-0000-0000-0000-000000000099",
+        })
       ).rejects.toThrow(NotFoundError);
     });
   });

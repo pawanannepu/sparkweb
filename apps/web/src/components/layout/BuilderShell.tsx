@@ -17,6 +17,7 @@ export interface BuilderShellProps {
   children: React.ReactNode;
   projectName?: string;
   headerActions?: React.ReactNode;
+  branchSwitcher?: React.ReactNode;
   className?: string;
 }
 
@@ -24,6 +25,7 @@ export function BuilderShell({
   children,
   projectName = "Untitled App",
   headerActions,
+  branchSwitcher,
   className,
 }: BuilderShellProps) {
   const { setTheme, resolvedTheme } = useTheme();
@@ -46,6 +48,8 @@ export function BuilderShell({
           <Badge variant="outline" className="font-mono text-xs bg-muted/40">
             {projectName}
           </Badge>
+
+          {branchSwitcher}
         </div>
 
         {/* Right Header Actions & Theme Toggle */}

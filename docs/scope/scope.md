@@ -18,7 +18,7 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 | 5 | Core generation loop and live preview | Slice 1 | in-progress |
 | 6 | Visual canvas inspector and direct styling | Slice 2 | in-progress |
 | 7 | Self healing verification engine | Slice 3 | in-progress |
-| 8 | Version history snapshots and time travel rollback | Slice 4 | planned |
+| 8 | Version history snapshots and time travel rollback | Slice 4 | in-progress |
 | 9 | Managed database viewer and client data tools | Slice 5 | planned |
 | 10 | One click publishing and isolated live hosting | Slice 6 | planned |
 | 11 | Multi modal generation from images and design links | Slice 7 | planned |
@@ -137,10 +137,21 @@ spec [0006](../specs/0006-self-healing-verification-engine/index.md) · code in 
 
 ## Slice 4: Version history snapshots and time travel rollback
 
-### 8. Version history snapshots and time travel rollback · needs a decision
+### 8. Version history snapshots and time travel rollback
 Record immutable snapshots at every generation step or manual adjustment, allowing creators to view visual and code diffs, undo actions, roll back to prior states, and safely branch experiments.
 **Done when:** creators can browse chronological versions, inspect side by side visual and code diffs, restore any past checkpoint, and fork into a separate branch.
-- [ ] Design it (spec): `/architect version history snapshots & time travel rollback`
+spec [0007](../specs/0007-version-history-snapshots-and-time-travel-rollback/index.md) · code in `apps/web`, `packages/db`, `packages/shared`
+- [x] Design it (spec): `/architect version history snapshots & time travel rollback`
+- [x] Build it: `/develop version history snapshots & time travel rollback`
+  - [x] Schema migration, project branches table, extended snapshot columns, and domain queries (AC-1, AC-8)
+  - [x] Server API routes for snapshot listing, diff computation, manual checkpoint, and rollback (AC-2, AC-3, AC-7, AC-8)
+  - [x] Client version history hook, Zustand store, and branch switcher toolbar dropdown (AC-4, AC-5)
+  - [x] Version history sliding drawer, timeline grouping, search filter, and code diff viewer (AC-3, AC-5, AC-6)
+  - [x] Temporary inspect mode preview synchronization, sandbox hot reloading, and rollback execution (AC-6, AC-7, AC-8)
+- [x] Verify it: `/check verify version history snapshots & time travel rollback`
+- [x] Test it: `/test version history snapshots & time travel rollback`
+- [x] Review it (fresh model): `/check review version history snapshots & time travel rollback`
+- [x] Document it: `/document version history snapshots & time travel rollback`
 (basis: immutable snapshot history allows risk free iteration and rollback)
 
 ## Slice 5: Managed database viewer and client data tools

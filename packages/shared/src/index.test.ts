@@ -11,6 +11,8 @@ import type {
   PreviewStatus,
   ProjectFile,
   SelectedElementState,
+  SnapshotDiffResult,
+  SnapshotSummary,
 } from "./index";
 
 describe("shared type contracts", () => {
@@ -136,5 +138,60 @@ describe("shared type contracts", () => {
     expect(healthStatusMsg.type).toBe("PREVIEW_HEALTH_STATUS");
     expect(errorPayload.category).toBe("import");
     expect(errorPayload.errorFingerprint).toBe("abcdef123456");
+  });
+
+  it("validates version history and snapshot diff contracts", () => {
+    // Arrange
+    const summary: SnapshotSummary = {
+      id: "snap-123",
+      projectId: "proj-456",
+      parentId: null,
+      branchId: "branch-main",
+      branchName: "main",
+      treeHash: "hash123",
+      fileCount: 5,
+      message: "Initial snapshot",
+      trigger: "manual",
+      tag: "v1.0",
+      restoredFromSnapshotId: null,
+      createdAt: new Date().toISOString(),
+    };
+
+    const diffResult: SnapshotDiffResult = {
+      baseSnapshotId: null,
+      targetSnapshotId: "snap-123",
+      summary: {
+        totalFiles: 1,
+        addedFiles: 1,
+        modifiedFiles: 0,
+        deletedFiles: 0,
+        totalAdditions: 10,
+        totalDeletions: 0,
+      },
+      fileDiffs: [
+        {
+          path: "src/App.tsx",
+          status: "added",
+          isBinary: false,
+          additions: 10,
+          deletions: 0,
+          hunks: [
+            {
+              oldStart: 0,
+              oldLines: 0,
+              newStart: 1,
+              newLines: 10,
+              lines: ["+export default function App() {}"],
+            },
+          ],
+        },
+      ],
+    };
+
+    // Act & Assert
+    expect(summary.trigger).toBe("manual");
+    expect(summary.fileCount).toBe(5);
+    expect(diffResult.summary.addedFiles).toBe(1);
+    expect(diffResult.fileDiffs[0]?.status).toBe("added");
   });
 });

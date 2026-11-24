@@ -41,6 +41,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expandable healing progress card component in generation panel displaying error diagnosis, patch file badges, retry counts, and resolution status (see spec 0006)
 - Interactive manual repair button on preview error banner allowing creators to trigger on demand repair passes with a fresh retry budget (see spec 0006)
 - Deferred snapshot persistence committing project snapshots and healing telemetry to PostgreSQL only after preview health verification succeeds (see spec 0006)
+- Relational branch tracking in PostgreSQL with project branches table, unique project and name constraints, and active branch head pointers (see spec 0007)
+- Extended snapshot lineage recording file count, branch associations, trigger classifications, tags, and restored snapshot identifiers (see spec 0007)
+- Opaque cursor based snapshot pagination delivering lightweight metadata and stored file counts without loading full file trees (see spec 0007)
+- Server side code diff calculation using jsdiff with structured file status summaries, patch hunks, and binary asset filtering (see spec 0007)
+- Workspace toolbar branch switcher dropdown allowing creators to browse branches, create new branches from checkpoints, and switch active branch with immediate file tree return (see spec 0007)
+- Left sliding version history drawer displaying a chronological timeline grouped by relative date with trigger badges, tags, message previews, and search filters (see spec 0007)
+- Side by side and unified code diff viewer with file selection, syntax colored additions and deletions, and hunk navigation (see spec 0007)
+- Read only inspect mode rendering historical application states in the live preview sandbox with an alert banner while locking inputs against accidental mutation (see spec 0007)
+- Non destructive forward rollback creating a new snapshot from historical files, preserving complete commit history and updating pointers atomically (see spec 0007)
+- Smart preview reload on rollback detecting package dependency differences to trigger clean container boot only when dependencies change (see spec 0007)
 
 ### Changed
 - Builder workbench default preview target points to the active WebContainer sandbox runner route (see spec 0004)
@@ -48,6 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sandbox starter template bundles custom Vite inspector plugin and client runtime script for source location tagging (see spec 0005)
 - Server generation route defers snapshot persistence and returns message identifiers in event streams for client verification orchestration (see spec 0006)
 - Preview runner listens for hot module replacement events and responds to health verification probes (see spec 0006)
+- Builder workbench toolbar integrates branch switching and version history sliding drawer controls (see spec 0007)
+- New projects automatically provision a default main branch upon creation (see spec 0007)
 
 ### Security
 - Encrypted storage for personal provider credentials at rest with authentication tag tamper verification (see spec 0002)
@@ -57,3 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Workspace source boundary enforcement in client AST modifier rejecting modifications to external node_modules or path traversal attempts (see spec 0005)
 - Read only warning badges and disabled editing controls for unmapped or third party components (see spec 0005)
 - Fingerprint loop detection preventing infinite circular repair passes and runaway token consumption (see spec 0006)
+- Concurrency protection rejecting rollback requests with HTTP 409 Conflict during active streaming generation runs (see spec 0007)
+- Branch protection forbidding deletion of the default main branch or currently active branch (see spec 0007)
+- Deployment protection preventing deletion of snapshots linked to active deployments (see spec 0007)
+- Strict workspace ownership validation verifying project ownership on all snapshot, diff, branch, and rollback endpoints (see spec 0007)
