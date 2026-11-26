@@ -1,15 +1,18 @@
 "use client";
 
 import { computeErrorFingerprint } from "@spark/sandbox";
-import type {
-  FileOperation,
-  HealingAttempt,
-  HealingCategory,
-  HealingTelemetry,
-  PlanStep,
-  PreviewErrorPayload,
-  PreviewHealthStatusPayload,
-  ProjectFile,
+import {
+  type AiProvider,
+  type FileOperation,
+  type HealingAttempt,
+  type HealingCategory,
+  type HealingTelemetry,
+  isAiProvider,
+  type PlanStep,
+  type PreviewErrorPayload,
+  type PreviewHealthStatusPayload,
+  type ProjectFile,
+  resolveModelProvider,
 } from "@spark/shared";
 import { useCallback, useRef, useState } from "react";
 
@@ -21,6 +24,7 @@ export interface UseGenerationLoopOptions {
   onFileChange?: (file: ProjectFile) => void;
   onFinish?: (snapshotId: string, treeHash: string) => void;
   onError?: (error: string) => void;
+  onProviderKeyMissing?: (provider: AiProvider) => void;
   onHealingTelemetryChange?: (telemetry: HealingTelemetry) => void;
 }
 
@@ -91,6 +95,7 @@ export function useGenerationLoop({
   onFileChange,
   onFinish,
   onError,
+  onProviderKeyMissing,
   onHealingTelemetryChange,
 }: UseGenerationLoopOptions): UseGenerationLoopReturn {
   const [isStreaming, setIsStreaming] = useState(false);
@@ -136,11 +141,13 @@ export function useGenerationLoop({
   // Central Verification & Self-Healing Loop (AC-2, AC-4, AC-6, AC-7)
   const runSelfHealingVerificationLoop = useCallback(
     async (
-      messageId: string,
+      initialMessageId: string | null,
       turnDescription: string,
       model = "claude-3-7-sonnet",
-      initialError?: PreviewErrorPayload
+      initialError?: PreviewErrorPayload,
+      signal?: AbortSignal
     ): Promise<void> => {
+      let activeMessageId = initialMessageId;
       let attemptsCount = 0;
       const seenFingerprints = new Set<string>();
       const currentAttempts: HealingAttempt[] = [];
@@ -151,12 +158,20 @@ export function useGenerationLoop({
       );
 
       while (attemptsCount <= 3) {
+        if (signal?.aborted) {
+          return;
+        }
+
         // Step 1: Health Check Handshake
         let healthStatus: PreviewHealthStatusPayload;
         if (attemptsCount === 0 && initialError) {
           healthStatus = { healthy: false, error: initialError };
         } else {
           healthStatus = requestHealthCheck ? await requestHealthCheck(4000) : { healthy: true };
+        }
+
+        if (signal?.aborted) {
+          return;
         }
 
         if (healthStatus.healthy) {
@@ -184,13 +199,14 @@ export function useGenerationLoop({
           const snapRes = await fetch(`/api/projects/${projectId}/snapshots`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            signal,
             body: JSON.stringify({
               files: filesPayload,
               message:
                 attemptsCount > 0
                   ? `${turnDescription} (with ${attemptsCount} automated repair${attemptsCount > 1 ? "s" : ""})`
                   : turnDescription,
-              messageId,
+              ...(activeMessageId ? { messageId: activeMessageId } : {}),
               healingTelemetry: finalTelemetry,
               status: attemptsCount > 0 ? "healed" : "clean",
             }),
@@ -248,13 +264,17 @@ export function useGenerationLoop({
           );
 
           try {
+            if (signal?.aborted) {
+              return;
+            }
             const snapRes = await fetch(`/api/projects/${projectId}/snapshots`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
+              signal,
               body: JSON.stringify({
                 files: filesPayload,
                 message: `[Unverified - healing exhausted] ${turnDescription}`,
-                messageId,
+                ...(activeMessageId ? { messageId: activeMessageId } : {}),
                 healingTelemetry: exhaustedTelemetry,
                 status: "exhausted",
               }),
@@ -264,6 +284,9 @@ export function useGenerationLoop({
               onFinish?.(snapData.id, snapData.treeHash);
             }
           } catch (e) {
+            if ((e as Error)?.name === "AbortError") {
+              return;
+            }
             console.warn("Failed to save exhausted snapshot", e);
           }
           return;
@@ -309,7 +332,10 @@ export function useGenerationLoop({
           allFilesMap
         );
 
-        attempt.status = "patching";
+        currentAttempts[currentAttempts.length - 1] = {
+          ...attempt,
+          status: "patching",
+        };
         updateTelemetry({
           status: "in_progress",
           totalRepairs: attemptsCount,
@@ -317,11 +343,13 @@ export function useGenerationLoop({
         });
 
         // Call server repair route (AC-3)
+        const repairProvider = resolveModelProvider(model);
         const repairRes = await fetch(`/api/projects/${projectId}/repair`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal,
           body: JSON.stringify({
-            messageId,
+            ...(activeMessageId ? { messageId: activeMessageId } : {}),
             error: {
               ...detectedError,
               category: errorCategory,
@@ -333,11 +361,34 @@ export function useGenerationLoop({
             },
             importedSiblingFiles: siblingFiles,
             model,
+            provider: repairProvider,
           }),
         });
 
+        if (signal?.aborted) {
+          return;
+        }
+
         if (!repairRes.ok) {
-          throw new Error(`Repair request failed (${repairRes.status})`);
+          let repairErrMessage = `Repair request failed (${repairRes.status})`;
+          try {
+            const errData = (await repairRes.json()) as {
+              error?: string;
+              provider?: string;
+              message?: string;
+            };
+            if (errData?.message) repairErrMessage = errData.message;
+            if (
+              errData?.error === "PROVIDER_KEY_MISSING" &&
+              typeof errData.provider === "string" &&
+              isAiProvider(errData.provider)
+            ) {
+              onProviderKeyMissing?.(errData.provider);
+            }
+          } catch {
+            // Keep fallback error message
+          }
+          throw new Error(repairErrMessage);
         }
 
         const repairReader = repairRes.body?.getReader();
@@ -349,8 +400,15 @@ export function useGenerationLoop({
         let repairBuffer = "";
 
         while (true) {
+          if (signal?.aborted) {
+            await repairReader.cancel().catch(() => {});
+            return;
+          }
           const { done, value } = await repairReader.read();
           if (done) break;
+          if (signal?.aborted) {
+            return;
+          }
 
           repairBuffer += decoder.decode(value, { stream: true });
           const messages = repairBuffer.split("\n\n");
@@ -366,6 +424,10 @@ export function useGenerationLoop({
 
             try {
               const data = JSON.parse(dataStr);
+              if (typeof data.messageId === "string" && data.messageId) {
+                activeMessageId = data.messageId;
+                lastAssistantMessageIdRef.current = data.messageId;
+              }
               if (eventType === "file_op") {
                 const patchedFile: ProjectFile = {
                   path: data.path,
@@ -392,15 +454,25 @@ export function useGenerationLoop({
                   },
                 ]);
 
-                if (!attempt.patchFiles.includes(data.path)) {
-                  attempt.patchFiles.push(data.path);
+                const latestAttempt = currentAttempts[currentAttempts.length - 1];
+                if (latestAttempt && !latestAttempt.patchFiles.includes(data.path)) {
+                  currentAttempts[currentAttempts.length - 1] = {
+                    ...latestAttempt,
+                    patchFiles: [...latestAttempt.patchFiles, data.path],
+                  };
                 }
 
                 // Push patch directly to preview runner (AC-4)
                 onFileChange?.(patchedFile);
               } else if (eventType === "healing_status") {
                 if (data.status) {
-                  attempt.status = data.status;
+                  const latestAttempt = currentAttempts[currentAttempts.length - 1];
+                  if (latestAttempt) {
+                    currentAttempts[currentAttempts.length - 1] = {
+                      ...latestAttempt,
+                      status: data.status,
+                    };
+                  }
                   updateTelemetry({
                     status: "in_progress",
                     totalRepairs: attemptsCount,
@@ -414,7 +486,13 @@ export function useGenerationLoop({
           }
         }
 
-        attempt.status = "verifying";
+        const latestAttempt = currentAttempts[currentAttempts.length - 1];
+        if (latestAttempt) {
+          currentAttempts[currentAttempts.length - 1] = {
+            ...latestAttempt,
+            status: "verifying",
+          };
+        }
         updateTelemetry({
           status: "in_progress",
           totalRepairs: attemptsCount,
@@ -429,6 +507,7 @@ export function useGenerationLoop({
       onFileChange,
       onFinish,
       onError,
+      onProviderKeyMissing,
       projectId,
       requestHealthCheck,
       updateTelemetry,
@@ -442,22 +521,28 @@ export function useGenerationLoop({
       setIsStreaming(true);
       setError(null);
 
-      const syntheticMessageId = lastAssistantMessageIdRef.current || `repair-${Date.now()}`;
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
 
       try {
         await runSelfHealingVerificationLoop(
-          syntheticMessageId,
+          null,
           "Manual error repair pass",
           model,
-          manualError
+          manualError,
+          controller.signal
         );
       } catch (err: unknown) {
         const errorObj = err as Error;
+        if (errorObj.name === "AbortError") {
+          return;
+        }
         const msg = errorObj.message || "Manual repair failed";
         setError(msg);
         onError?.(msg);
       } finally {
         setIsStreaming(false);
+        abortControllerRef.current = null;
       }
     },
     [isStreaming, onError, runSelfHealingVerificationLoop]
@@ -478,6 +563,7 @@ export function useGenerationLoop({
       abortControllerRef.current = controller;
 
       try {
+        const provider = resolveModelProvider(model || "claude-3-7-sonnet");
         const response = await fetch(`/api/projects/${projectId}/generate`, {
           method: "POST",
           headers: {
@@ -487,6 +573,7 @@ export function useGenerationLoop({
             prompt: prompt.trim(),
             threadId,
             model,
+            provider,
           }),
           signal: controller.signal,
         });
@@ -494,9 +581,20 @@ export function useGenerationLoop({
         if (!response.ok) {
           let errorMessage = `Generation failed (${response.status})`;
           try {
-            const errData = await response.json();
+            const errData = (await response.json()) as {
+              error?: string;
+              provider?: string;
+              message?: string;
+            };
             if (errData?.message) errorMessage = errData.message;
             else if (errData?.error) errorMessage = errData.error;
+            if (
+              errData?.error === "PROVIDER_KEY_MISSING" &&
+              typeof errData.provider === "string" &&
+              isAiProvider(errData.provider)
+            ) {
+              onProviderKeyMissing?.(errData.provider);
+            }
           } catch {
             // Keep fallback
           }
@@ -601,8 +699,14 @@ export function useGenerationLoop({
         }
 
         // Otherwise start verification & self-healing handshake (AC-2, AC-4, AC-7)
-        if (assistantMessageId) {
-          await runSelfHealingVerificationLoop(assistantMessageId, prompt, model);
+        if (assistantMessageId && !controller.signal.aborted) {
+          await runSelfHealingVerificationLoop(
+            assistantMessageId,
+            prompt,
+            model,
+            undefined,
+            controller.signal
+          );
         }
       } catch (err: unknown) {
         const errorObj = err as Error;
@@ -622,6 +726,7 @@ export function useGenerationLoop({
       onError,
       onFileChange,
       onFinish,
+      onProviderKeyMissing,
       projectId,
       runSelfHealingVerificationLoop,
       threadId,

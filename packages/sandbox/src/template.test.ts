@@ -4,6 +4,7 @@ import {
   isSourceFilePath,
   STARTER_TEMPLATE_FILES,
   toWebContainerFileSystemTree,
+  upgradeLegacyDbTemplate,
 } from "./template";
 
 describe("sandbox starter template and file tree utilities", () => {
@@ -17,10 +18,45 @@ describe("sandbox starter template and file tree utilities", () => {
     expect(STARTER_TEMPLATE_FILES["src/spark-inspector-client.ts"]).toBeDefined();
   });
 
-  it("registers spark-inspector plugin in vite.config.ts", () => {
+  it("registers spark-inspector plugin and excludes pglite from optimizeDeps in vite.config.ts", () => {
     const viteConfig = STARTER_TEMPLATE_FILES["vite.config.ts"]?.content;
     expect(viteConfig).toContain("sparkInspector");
     expect(viteConfig).toContain("plugins/spark-inspector.js");
+    expect(viteConfig).toContain("optimizeDeps");
+    expect(viteConfig).toContain("@electric-sql/pglite");
+  });
+
+  it("replays seed.sql only after CREATE TABLE DDL and avoids Vite HMR full reload on seed write", () => {
+    const dbFile = STARTER_TEMPLATE_FILES["src/lib/db.ts"]?.content ?? "";
+    const appFile = STARTER_TEMPLATE_FILES["src/App.tsx"]?.content ?? "";
+
+    expect(dbFile).not.toContain("import.meta.glob");
+    expect(dbFile).toContain('fetch("/seed.sql"');
+    expect(dbFile).toContain("replaySeedIfPresent");
+    expect(dbFile).toContain("write.isCreateTable");
+    expect(appFile).toContain("replaySeedIfPresent()");
+  });
+
+  it("upgrades legacy pre-fix src/lib/db.ts templates while leaving custom db.ts untouched", () => {
+    const legacySnapshot = {
+      "src/lib/db.ts": {
+        content:
+          'const seedModules = import.meta.glob("/seed.sql");\nawait replaySeedIfPresent(instance);',
+      },
+      "seed.sql": { content: "INSERT INTO demo_items VALUES (1, 'Row');" },
+    };
+    const upgraded = upgradeLegacyDbTemplate(legacySnapshot);
+    expect(upgraded["src/lib/db.ts"]?.content).toBe(
+      STARTER_TEMPLATE_FILES["src/lib/db.ts"]?.content
+    );
+    expect(upgraded["seed.sql"]?.content).toBe("INSERT INTO demo_items VALUES (1, 'Row');");
+
+    const customSnapshot = {
+      "src/lib/db.ts": { content: "// Custom user db setup" },
+    };
+    expect(upgradeLegacyDbTemplate(customSnapshot)["src/lib/db.ts"]?.content).toBe(
+      "// Custom user db setup"
+    );
   });
 
   it("filters out node_modules and build cache files correctly", () => {

@@ -1,14 +1,4 @@
-import {
-  and,
-  db,
-  desc,
-  eq,
-  getDecryptedApiKey,
-  projects,
-  promptMessages,
-  promptThreads,
-  snapshots,
-} from "@spark/db";
+import { and, db, desc, eq, projects, promptMessages, promptThreads, snapshots } from "@spark/db";
 import {
   type FileOperation,
   type GenerationPlan,
@@ -17,17 +7,33 @@ import {
   type SnapshotFilesMap,
   STARTER_TEMPLATE_FILES,
 } from "@spark/sandbox";
+import { type AiProvider, isAiProvider, resolveModelProvider } from "@spark/shared";
+import { generateText } from "ai";
 import { type NextRequest, NextResponse } from "next/server";
+import {
+  createAiLanguageModel,
+  parseGeneratedFilesPayload,
+  resolveProviderApiKey,
+} from "@/lib/ai-provider";
 import { getCurrentUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-const MODEL_REGISTRY: Record<string, string> = {
-  "claude-3-7-sonnet": "anthropic",
-  "claude-3-5-sonnet": "anthropic",
-  "gpt-4o": "openai",
-  "gemini-2.0-flash": "gemini",
-};
+function buildGenerationPromptContext(currentFiles: SnapshotFilesMap): string {
+  const relevantPaths = Object.keys(currentFiles)
+    .filter(
+      (filePath) =>
+        filePath === "package.json" || filePath === "index.html" || filePath.startsWith("src/")
+    )
+    .slice(0, 15);
+
+  return relevantPaths
+    .map((filePath) => {
+      const content = currentFiles[filePath]?.content || "";
+      return `--- FILE: ${filePath} ---\n${content.slice(0, 6000)}`;
+    })
+    .join("\n\n");
+}
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id: projectId } = await params;
@@ -43,6 +49,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     prompt?: string;
     threadId?: string;
     model?: string;
+    provider?: string;
     activeFiles?: string[];
   };
   try {
@@ -51,7 +58,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const prompt = body.prompt?.trim();
+  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   if (!prompt) {
     return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
   }
@@ -69,20 +76,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   // 4. Resolve model provider and API key
-  const requestedModel = body.model || "claude-3-7-sonnet";
-  const provider = MODEL_REGISTRY[requestedModel] || "anthropic";
+  const requestedModel =
+    (typeof body.model === "string" && body.model.trim()) || "claude-3-7-sonnet";
+  const explicitProvider: AiProvider | undefined =
+    typeof body.provider === "string" && isAiProvider(body.provider) ? body.provider : undefined;
+  const provider = resolveModelProvider(requestedModel, explicitProvider);
 
-  let apiKey: string | null = null;
-  try {
-    apiKey = await getDecryptedApiKey(db, { userId: user.id, provider });
-  } catch {
-    // If not in database, check environment variables
-    if (provider === "anthropic") apiKey = process.env.ANTHROPIC_API_KEY || null;
-    else if (provider === "openai") apiKey = process.env.OPENAI_API_KEY || null;
-    else if (provider === "gemini") apiKey = process.env.GEMINI_API_KEY || null;
-  }
+  const apiKey = await resolveProviderApiKey({ userId: user.id, provider });
 
-  // Check if offline/mock generation is enabled or no key is present in test mode
+  // Check if offline/mock generation is enabled or running in test mode
   const isMockMode = process.env.MOCK_AI === "true" || process.env.NODE_ENV === "test";
 
   if (!apiKey && !isMockMode) {
@@ -90,7 +92,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       {
         error: "PROVIDER_KEY_MISSING",
         provider,
-        message: `Please add your ${provider} API key in workspace settings before generating code.`,
+        message: `Please add your ${provider} API key in API Keys settings before generating code.`,
       },
       { status: 400 }
     );
@@ -220,16 +222,65 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }
 
       // Stage 2: Code Generation & Streaming file operations
-      // Synthesize code changes based on prompt
       const generatedFiles: ProjectFile[] = [];
       const fileOps: FileOperation[] = [];
+      let generationSummary = `Synthesized requested changes for "${prompt}". Code generation complete.`;
+      let totalTokens = 1240;
 
-      // Check prompt keywords to generate targeted application code
-      const lowerPrompt = prompt.toLowerCase();
-      let updatedAppContent = currentFiles["src/App.tsx"]?.content || "";
+      if (!isMockMode && apiKey) {
+        const aiResult = await generateText({
+          model: createAiLanguageModel(provider, requestedModel, apiKey),
+          abortSignal: req.signal,
+          system: [
+            "You are Spark, an expert full-stack React + TypeScript + Tailwind CSS engineer inside the sparkweb live Vite sandbox.",
+            "Generate clean, working, self-contained application code using React 19, TypeScript, Tailwind CSS classes, and lucide-react icons (only use packages already in package.json unless updating package.json).",
+            "Do NOT modify plugins/spark-inspector.js or vite.config.ts unless explicitly required.",
+            "Respond ONLY with valid JSON matching this exact schema (no markdown prose outside JSON):",
+            '{ "summary": "brief description of what was built", "files": [{ "path": "src/App.tsx", "content": "full file source..." }] }',
+          ].join("\n"),
+          prompt: [
+            `User request:\n${prompt}`,
+            "",
+            "Current project files:",
+            buildGenerationPromptContext(currentFiles),
+          ].join("\n"),
+        });
 
-      if (lowerPrompt.includes("todo") || lowerPrompt.includes("task")) {
-        updatedAppContent = `import React, { useState } from "react";
+        const parsedOutput = parseGeneratedFilesPayload(aiResult.text);
+        if (!parsedOutput || parsedOutput.files.length === 0) {
+          throw new Error(
+            "Model response did not contain valid generated file updates. Please try again or pick another model."
+          );
+        }
+
+        if (parsedOutput.summary) {
+          generationSummary = parsedOutput.summary;
+        }
+        if (typeof aiResult.usage?.totalTokens === "number") {
+          totalTokens = aiResult.usage.totalTokens;
+        }
+
+        for (const file of parsedOutput.files) {
+          generatedFiles.push(file);
+          fileOps.push({
+            path: file.path,
+            op: "write",
+            status: "completed",
+            diff: `+ updated ${file.path} via ${requestedModel}`,
+          });
+          await sendEvent("file_op", {
+            path: file.path,
+            op: "write",
+            content: file.content,
+          });
+        }
+      } else {
+        // Deterministic mock / test generation
+        const lowerPrompt = prompt.toLowerCase();
+        let updatedAppContent = currentFiles["src/App.tsx"]?.content || "";
+
+        if (lowerPrompt.includes("todo") || lowerPrompt.includes("task")) {
+          updatedAppContent = `import React, { useState } from "react";
 import { CheckSquare, Plus, Trash2, Sparkles } from "lucide-react";
 
 interface Todo {
@@ -305,9 +356,8 @@ export default function App() {
     </div>
   );
 }`;
-      } else {
-        // General feature generation enhancing the app
-        updatedAppContent = `import React, { useState } from "react";
+        } else {
+          updatedAppContent = `import React, { useState } from "react";
 import { Sparkles, Zap, Heart, RefreshCw } from "lucide-react";
 
 export default function App() {
@@ -338,30 +388,30 @@ export default function App() {
     </div>
   );
 }`;
+        }
+
+        generatedFiles.push({
+          path: "src/App.tsx",
+          content: updatedAppContent,
+        });
+
+        fileOps.push({
+          path: "src/App.tsx",
+          op: "write",
+          status: "completed",
+          diff: `+ updated App component matching prompt`,
+        });
+
+        await sendEvent("file_op", {
+          path: "src/App.tsx",
+          op: "write",
+          content: updatedAppContent,
+        });
       }
-
-      generatedFiles.push({
-        path: "src/App.tsx",
-        content: updatedAppContent,
-      });
-
-      fileOps.push({
-        path: "src/App.tsx",
-        op: "write",
-        status: "completed",
-        diff: `+ updated App component matching prompt`,
-      });
-
-      // Stream file operation event
-      await sendEvent("file_op", {
-        path: "src/App.tsx",
-        op: "write",
-        content: updatedAppContent,
-      });
 
       // Stream text chunk
       await sendEvent("text", {
-        chunk: `Synthesized requested changes for "${prompt}". Code generation complete.`,
+        chunk: generationSummary,
       });
 
       // Stage 3: Snapshot Persistence & Finish
@@ -372,6 +422,10 @@ export default function App() {
         steps: planSteps,
       });
 
+      if (isCancelled) {
+        throw new Error("Generation cancelled by user");
+      }
+
       // Update assistant message with generation metadata; persistence of snapshot
       // is deferred until the client verifies health in the live preview (AC-2)
       if (assistantMessageId) {
@@ -380,13 +434,13 @@ export default function App() {
           fileOperations: fileOps,
           model: requestedModel,
           provider,
-          totalTokens: 1240,
+          totalTokens,
         };
 
         await db
           .update(promptMessages)
           .set({
-            content: `Generated changes for: ${prompt}`,
+            content: generationSummary,
             status: "streaming",
             toolCalls: generationMeta as unknown as Record<string, unknown>,
           })

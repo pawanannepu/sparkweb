@@ -1,6 +1,6 @@
 "use client";
 
-import { WebContainerRunner } from "@spark/sandbox";
+import { upgradeLegacyDbTemplate, WebContainerRunner } from "@spark/sandbox";
 import type {
   BridgeMessage,
   PreviewBootPayload,
@@ -17,7 +17,11 @@ export default function SandboxRunnerPage() {
   const [logs, setLogs] = useState<Array<{ id: string; text: string }>>([]);
   const [error, setError] = useState<PreviewErrorPayload | null>(null);
   const runnerRef = useRef<WebContainerRunner | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
+  previewUrlRef.current = previewUrl;
   const latestErrorRef = useRef<PreviewErrorPayload | null>(null);
+  const writeSeqRef = useRef(0);
+  const hmrCompletedForSeqRef = useRef(-1);
   const pendingHealthCheckRef = useRef<{
     timeoutId: NodeJS.Timeout;
     resolve: (healthy: boolean, err?: PreviewErrorPayload) => void;
@@ -100,14 +104,39 @@ export default function SandboxRunnerPage() {
         if (msg.type === "PREVIEW_BOOT") {
           try {
             const payload = msg.payload as unknown as PreviewBootPayload;
-            await runner.boot(payload?.files);
+            const bootFiles = payload?.files ? upgradeLegacyDbTemplate(payload.files) : undefined;
+            if (runner.getStatus() === "idle") {
+              await runner.boot(bootFiles);
+            } else if (bootFiles && Object.keys(bootFiles).length > 0) {
+              // If auto-boot already started before PREVIEW_BOOT arrived, wait for it to finish
+              // (if still booting/installing) then apply hydrated files and reload the frame.
+              if (runner.getStatus() !== "running") {
+                await runner.boot();
+              }
+              const fileList = Object.entries(bootFiles).map(([path, entry]) => ({
+                path,
+                content: entry.content,
+              }));
+              await runner.applyFileUpdates(fileList);
+              if (previewUrlRef.current) {
+                const iframe = document.getElementById("sandbox-app-frame") as HTMLIFrameElement;
+                if (iframe) {
+                  iframe.src = previewUrlRef.current;
+                }
+              }
+            }
           } catch (err: unknown) {
             console.error("Runner boot error:", err);
+          }
+        } else if (msg.type === "PREVIEW_HEARTBEAT") {
+          if (runner.getStatus() === "idle") {
+            postToHost("PREVIEW_HEARTBEAT", { status: "runner_ready" });
           }
         } else if (msg.type === "PREVIEW_WRITE_FILES") {
           try {
             const payload = msg.payload as unknown as PreviewWriteFilesPayload;
             if (payload?.files && payload.files.length > 0) {
+              writeSeqRef.current += 1;
               latestErrorRef.current = null;
               setError(null);
               await runner.applyFileUpdates(payload.files);
@@ -134,7 +163,7 @@ export default function SandboxRunnerPage() {
             });
           };
 
-          const timeoutId = setTimeout(() => {
+          const evaluateCurrentHealth = () => {
             const overlayPresent = hasErrorOverlay();
             if (overlayPresent || latestErrorRef.current || runner.getStatus() === "error") {
               const reportError = latestErrorRef.current || {
@@ -146,25 +175,39 @@ export default function SandboxRunnerPage() {
             } else {
               resolveHealthCheck(true);
             }
-          }, timeoutMs);
+          };
+
+          // If HMR already completed for the latest file write before health check arrived,
+          // resolve after a brief 50ms settle window instead of waiting the full fallback timeout.
+          const effectiveTimeout =
+            writeSeqRef.current > 0 && hmrCompletedForSeqRef.current === writeSeqRef.current
+              ? Math.min(timeoutMs, 50)
+              : timeoutMs;
+
+          const timeoutId = setTimeout(evaluateCurrentHealth, effectiveTimeout);
 
           pendingHealthCheckRef.current = {
             timeoutId,
             resolve: resolveHealthCheck,
           };
         } else if (msg.type === "PREVIEW_RELOAD") {
-          if (previewUrl) {
+          if (previewUrlRef.current) {
             const iframe = document.getElementById("sandbox-app-frame") as HTMLIFrameElement;
             if (iframe) {
-              iframe.src = previewUrl;
+              iframe.src = previewUrlRef.current;
             }
           }
         } else if (
           msg.type === "PREVIEW_INSPECT_MODE" ||
           msg.type === "PREVIEW_INJECT_STYLES" ||
-          msg.type === "PREVIEW_UPDATE_TEXT"
+          msg.type === "PREVIEW_UPDATE_TEXT" ||
+          msg.type === "DB_INTROSPECT_REQUEST" ||
+          msg.type === "DB_QUERY_REQUEST" ||
+          msg.type === "DB_MUTATE_REQUEST" ||
+          msg.type === "DB_EXPORT_SEED_REQUEST" ||
+          msg.type === "DB_MUTATED_EVENT"
         ) {
-          // Forward inspector commands from host down to application iframe
+          // Forward inspector and database bridge commands from host down to application iframe
           const iframe = document.getElementById("sandbox-app-frame") as HTMLIFrameElement;
           if (iframe?.contentWindow) {
             iframe.contentWindow.postMessage(msg, "*");
@@ -181,6 +224,7 @@ export default function SandboxRunnerPage() {
             pendingHealthCheckRef.current.resolve(false, errPayload);
           }
         } else if (msg.type === "PREVIEW_HMR_COMPLETE") {
+          hmrCompletedForSeqRef.current = writeSeqRef.current;
           postToHost("PREVIEW_HMR_COMPLETE", msg.payload);
           if (pendingHealthCheckRef.current) {
             setTimeout(() => {
@@ -199,7 +243,13 @@ export default function SandboxRunnerPage() {
           msg.type === "PREVIEW_ELEMENT_HOVER" ||
           msg.type === "PREVIEW_ELEMENT_SELECT" ||
           msg.type === "PREVIEW_UPDATE_TEXT" ||
-          msg.type === "PREVIEW_NAVIGATE"
+          msg.type === "PREVIEW_NAVIGATE" ||
+          msg.type === "DB_READY_EVENT" ||
+          msg.type === "DB_INTROSPECT_RESPONSE" ||
+          msg.type === "DB_QUERY_RESPONSE" ||
+          msg.type === "DB_MUTATE_RESPONSE" ||
+          msg.type === "DB_MUTATED_EVENT" ||
+          msg.type === "DB_EXPORT_SEED_RESPONSE"
         ) {
           if (window.parent && window.parent !== window) {
             window.parent.postMessage(msg, "*");
@@ -209,21 +259,27 @@ export default function SandboxRunnerPage() {
     };
 
     window.addEventListener("message", handleMessage);
+    postToHost("PREVIEW_HEARTBEAT", { status: "runner_ready" });
 
-    // Automatically boot on load if not explicitly booted within 2 seconds
-    const bootTimer = setTimeout(() => {
-      if (runner.getStatus() === "idle") {
-        runner.boot().catch((err) => {
-          console.warn("Auto boot error", err);
-        });
-      }
-    }, 1500);
+    // Give the parent host window time to hydrate the project snapshot and send PREVIEW_BOOT
+    // before falling back to booting the starter template directly.
+    const isEmbedded = window.parent && window.parent !== window;
+    const bootTimer = setTimeout(
+      () => {
+        if (runner.getStatus() === "idle") {
+          runner.boot().catch((err) => {
+            console.warn("Auto boot error", err);
+          });
+        }
+      },
+      isEmbedded ? 6000 : 500
+    );
 
     return () => {
       clearTimeout(bootTimer);
       window.removeEventListener("message", handleMessage);
     };
-  }, [previewUrl]);
+  }, []);
 
   if (previewUrl && status === "running") {
     return (

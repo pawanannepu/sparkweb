@@ -2,6 +2,8 @@
 
 import { STARTER_TEMPLATE_FILES } from "@spark/sandbox";
 import type {
+  AiProvider,
+  BridgeMessage,
   BridgeMessageType,
   DeviceMode,
   PreviewErrorPayload,
@@ -10,8 +12,9 @@ import type {
   SnapshotFilesMap,
   SnapshotSummary,
 } from "@spark/shared";
-import { Sparkles } from "lucide-react";
+import { Database, KeyRound, Lock, Monitor, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { DatabaseViewer } from "@/components/database";
 import {
   GenerationProgressCard,
   PreviewErrorBanner,
@@ -31,11 +34,16 @@ import {
   PreviewFrame,
   PreviewToolbar,
 } from "@/components/layout";
+import { ApiKeysDialog } from "@/components/settings";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { useAiSettings } from "@/hooks/useAiSettings";
+import { useDatabaseViewer } from "@/hooks/useDatabaseViewer";
 import { useGenerationLoop } from "@/hooks/useGenerationLoop";
 import { usePreviewBridge } from "@/hooks/usePreviewBridge";
 import { useProjectFiles } from "@/hooks/useProjectFiles";
 import { useVersionHistory } from "@/hooks/useVersionHistory";
+import { cn } from "@/lib/utils";
 
 function parseDependencies(pkgContent?: string): Record<string, string> {
   if (!pkgContent) return {};
@@ -53,11 +61,36 @@ function areDependenciesEqual(pkgA?: string, pkgB?: string): boolean {
   return depsA === depsB;
 }
 
+const WORKBENCH_TAB_STORAGE_KEY = "sparkweb:workbench-tab";
+
 export default function BuilderPage() {
   const [projectId] = useState("00000000-0000-0000-0000-000000000001");
+  const [activeWorkbenchTab, setActiveWorkbenchTab] = useState<"preview" | "database">("preview");
+
+  useEffect(() => {
+    try {
+      const stored = window.sessionStorage.getItem(WORKBENCH_TAB_STORAGE_KEY);
+      if (stored === "preview" || stored === "database") {
+        setActiveWorkbenchTab(stored);
+      }
+    } catch {
+      // Ignore storage access errors in restricted frames
+    }
+  }, []);
+
+  const handleSelectWorkbenchTab = (tab: "preview" | "database") => {
+    setActiveWorkbenchTab(tab);
+    try {
+      window.sessionStorage.setItem(WORKBENCH_TAB_STORAGE_KEY, tab);
+    } catch {
+      // Ignore storage access errors
+    }
+  };
+  const [isGenerationStreaming, setIsGenerationStreaming] = useState(false);
   const [device, setDevice] = useState<DeviceMode>("desktop");
   const [currentPath, setCurrentPath] = useState("/");
   const [previewError, setPreviewError] = useState<PreviewErrorPayload | null>(null);
+  const [isManualRepairSession, setIsManualRepairSession] = useState(false);
   const [messages, setMessages] = useState<
     Array<{ id: string; role: "user" | "assistant"; content: string }>
   >([
@@ -72,19 +105,42 @@ export default function BuilderPage() {
   const [isCreateBranchOpen, setIsCreateBranchOpen] = useState(false);
   const [branchSourceSnapshotId, setBranchSourceSnapshotId] = useState<string | null>(null);
   const [branchSourceMessage, setBranchSourceMessage] = useState<string | null>(null);
+  const [isApiKeysOpen, setIsApiKeysOpen] = useState(false);
+  const [highlightedKeyProvider, setHighlightedKeyProvider] = useState<AiProvider | null>(null);
+
+  const aiSettings = useAiSettings();
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const dbBridgeHandlerRef = useRef<((msg: BridgeMessage) => void) | null>(null);
+  const runnerReadyRef = useRef(false);
+  const snapshotHydratedRef = useRef(false);
+  const bootedCurrentRunnerRef = useRef(false);
+  const latestFilesRef = useRef<SnapshotFilesMap>(STARTER_TEMPLATE_FILES);
   const sandboxUrl = process.env.NEXT_PUBLIC_SANDBOX_URL || "/sandbox/runner";
 
-  const { isConnected, sendToPreview, checkPreviewHealth } = usePreviewBridge({
+  const { isConnected, sendToPreview, checkPreviewHealth, resetConnection } = usePreviewBridge({
     iframeRef,
     targetUrl: sandboxUrl,
     onMessage: (msg) => {
-      if (msg.type === "PREVIEW_NAVIGATE" && typeof msg.payload.path === "string") {
+      if (msg.type === "PREVIEW_HEARTBEAT" && msg.payload.status === "runner_ready") {
+        runnerReadyRef.current = true;
+        if (snapshotHydratedRef.current && !bootedCurrentRunnerRef.current) {
+          bootedCurrentRunnerRef.current = true;
+          sendToPreview("PREVIEW_BOOT", { files: latestFilesRef.current });
+        }
+      } else if (msg.type === "PREVIEW_READY") {
+        if (snapshotHydratedRef.current && !bootedCurrentRunnerRef.current) {
+          bootedCurrentRunnerRef.current = true;
+          sendToPreview("PREVIEW_BOOT", { files: latestFilesRef.current });
+        }
+      } else if (msg.type === "PREVIEW_NAVIGATE" && typeof msg.payload.path === "string") {
         setCurrentPath(msg.payload.path);
       } else if (msg.type === "PREVIEW_ERROR") {
         const errorData = msg.payload as unknown as PreviewErrorPayload;
         setPreviewError(errorData);
+        if (!isGenerationStreaming) {
+          setIsManualRepairSession(false);
+        }
       } else if (msg.type === "PREVIEW_ELEMENT_SELECT") {
         const element = msg.payload as unknown as SelectedElementState;
         setSelectedElement(element);
@@ -93,6 +149,8 @@ export default function BuilderPage() {
         if (payload?.text) {
           applyTextUpdate(payload.text);
         }
+      } else if (msg.type.startsWith("DB_")) {
+        dbBridgeHandlerRef.current?.(msg);
       }
     },
   });
@@ -115,7 +173,7 @@ export default function BuilderPage() {
   } = useProjectFiles({
     projectId,
     initialFiles: STARTER_TEMPLATE_FILES,
-    isStreaming: false,
+    isStreaming: isGenerationStreaming,
     onWriteFiles: (filesToWrite) => {
       sendToPreview("PREVIEW_WRITE_FILES", { files: filesToWrite });
     },
@@ -124,9 +182,43 @@ export default function BuilderPage() {
     },
   });
 
+  latestFilesRef.current = files;
+  const sendToPreviewRef = useRef(sendToPreview);
+  sendToPreviewRef.current = sendToPreview;
+
+  // Hydrate latest project snapshot on mount so full page reloads restore seed.sql and app files
+  useEffect(() => {
+    let cancelled = false;
+    async function hydrateCurrentSnapshot() {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/snapshots/current`);
+        if (!res.ok) return;
+        const data = (await res.json()) as { files?: SnapshotFilesMap | null };
+        if (!cancelled && data?.files && Object.keys(data.files).length > 0) {
+          latestFilesRef.current = data.files;
+          setFiles(data.files, { resetHistory: true });
+        }
+      } catch {
+        // Keep starter template fallback if offline or unmocked in unit tests
+      } finally {
+        if (!cancelled) {
+          snapshotHydratedRef.current = true;
+          if (runnerReadyRef.current && !bootedCurrentRunnerRef.current) {
+            bootedCurrentRunnerRef.current = true;
+            sendToPreviewRef.current("PREVIEW_BOOT", { files: latestFilesRef.current });
+          }
+        }
+      }
+    }
+    hydrateCurrentSnapshot().catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, setFiles]);
+
   const versionHistory = useVersionHistory({
     projectId,
-    isStreaming: false,
+    isStreaming: isGenerationStreaming,
     hasUnsavedCanvasChanges,
     onInspectFiles: (historicalFiles) => {
       const filesList = Object.entries(historicalFiles).map(([path, entry]) => ({
@@ -225,7 +317,40 @@ export default function BuilderPage() {
         },
       ]);
     },
+    onProviderKeyMissing: (provider: AiProvider) => {
+      setHighlightedKeyProvider(provider);
+      setIsApiKeysOpen(true);
+    },
   });
+
+  useEffect(() => {
+    setIsGenerationStreaming(isStreaming);
+  }, [isStreaming]);
+
+  const databaseViewer = useDatabaseViewer({
+    projectId,
+    isConnected,
+    isStreaming,
+    sendToPreview,
+    onSeedSnapshotSaved: (snapshotId, sql) => {
+      setFiles({
+        ...files,
+        "seed.sql": { content: sql },
+      });
+      sendToPreview("PREVIEW_WRITE_FILES", {
+        files: [{ path: "seed.sql", content: sql }],
+      });
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: String(Date.now()),
+          role: "assistant",
+          content: `Exported preview database rows to seed.sql and saved snapshot ${snapshotId.slice(0, 8)} (database_seed).`,
+        },
+      ]);
+    },
+  });
+  dbBridgeHandlerRef.current = databaseViewer.handleBridgeMessage;
 
   // Global Keyboard shortcuts: Command+Z (Undo) and Command+Shift+Z (Redo) (AC-8)
   useEffect(() => {
@@ -257,6 +382,7 @@ export default function BuilderPage() {
   }, [canUndo, canRedo, undo, redo]);
 
   const handlePromptSubmit = async (promptText: string, model: string) => {
+    setIsManualRepairSession(false);
     setMessages((prev) => [...prev, { id: String(Date.now()), role: "user", content: promptText }]);
     await submitPrompt(promptText, model);
   };
@@ -264,7 +390,13 @@ export default function BuilderPage() {
   const [iframeKey, setIframeKey] = useState(0);
 
   const handleReload = () => {
-    sendToPreview("PREVIEW_RELOAD", {});
+    if (isConnected) {
+      sendToPreview("PREVIEW_RELOAD", {});
+      return;
+    }
+    resetConnection();
+    runnerReadyRef.current = false;
+    bootedCurrentRunnerRef.current = false;
     setIframeKey((prev) => prev + 1);
   };
 
@@ -280,6 +412,30 @@ export default function BuilderPage() {
   return (
     <BuilderShell
       projectName="Demo Application"
+      headerActions={
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setHighlightedKeyProvider(null);
+            setIsApiKeysOpen(true);
+          }}
+          aria-label="Configure AI API keys"
+          className="h-8 gap-1.5 text-xs"
+        >
+          <KeyRound className="h-3.5 w-3.5 text-indigo-500" />
+          <span>API Keys</span>
+          {aiSettings.hasKeyForProvider("openrouter") && (
+            <Badge
+              variant="secondary"
+              className="ml-0.5 bg-emerald-500/15 px-1.5 py-0 text-[10px] text-emerald-700 dark:text-emerald-300"
+            >
+              OpenRouter
+            </Badge>
+          )}
+        </Button>
+      }
       branchSwitcher={
         <BranchSwitcher
           branches={versionHistory.branches}
@@ -296,7 +452,9 @@ export default function BuilderPage() {
     >
       <BuilderWorkbench
         isInspectorOpen={
-          !versionHistory.isInspectMode && (isInspectMode || Boolean(selectedElement))
+          activeWorkbenchTab === "preview" &&
+          !versionHistory.isInspectMode &&
+          (isInspectMode || Boolean(selectedElement))
         }
         onToggleInspector={handleToggleInspect}
         inspectorContent={
@@ -373,7 +531,7 @@ export default function BuilderPage() {
                           onClick={() =>
                             handlePromptSubmit(
                               "Build a task manager with categories, filter tabs, and status badges",
-                              "claude-3-7-sonnet"
+                              aiSettings.selectedModel
                             )
                           }
                         >
@@ -385,7 +543,7 @@ export default function BuilderPage() {
                           onClick={() =>
                             handlePromptSubmit(
                               "Create an interactive analytics revenue card with monthly growth metric",
-                              "claude-3-7-sonnet"
+                              aiSettings.selectedModel
                             )
                           }
                         >
@@ -398,6 +556,17 @@ export default function BuilderPage() {
                       onSubmit={handlePromptSubmit}
                       onCancel={cancelGeneration}
                       isStreaming={isStreaming}
+                      selectedModel={aiSettings.selectedModel}
+                      onModelChange={aiSettings.setSelectedModel}
+                      openRouterModels={aiSettings.openRouterModels}
+                      directModels={aiSettings.directModels}
+                      configuredProviders={aiSettings.configuredProviders}
+                      openRouterKeyBudget={aiSettings.openRouterKeyBudget}
+                      hasOpenRouterKey={aiSettings.hasKeyForProvider("openrouter")}
+                      onOpenApiKeys={() => {
+                        setHighlightedKeyProvider("openrouter");
+                        setIsApiKeysOpen(true);
+                      }}
                     />
                   </>
                 )}
@@ -406,78 +575,199 @@ export default function BuilderPage() {
           </ChatPanel>
         }
         previewContent={
-          <div className="flex h-full w-full flex-col">
-            <PreviewToolbar
-              activeDevice={device}
-              onDeviceChange={setDevice}
-              onReload={handleReload}
-              currentPath={currentPath}
-              onNavigate={handleNavigate}
-              isConnected={isConnected}
-              sandboxUrl={sandboxUrl}
-              isInspectMode={isInspectMode}
-              onToggleInspect={handleToggleInspect}
-              isHistoryOpen={versionHistory.isDrawerOpen}
-              onToggleHistory={versionHistory.toggleDrawer}
-            />
-
-            {/* Inspect Mode Banner (AC-6) */}
-            {versionHistory.isInspectMode && versionHistory.inspectSnapshotId && (
-              <InspectModeBanner
-                snapshotId={versionHistory.inspectSnapshotId}
-                snapshotMessage={
-                  versionHistory.snapshots.find((s) => s.id === versionHistory.inspectSnapshotId)
-                    ?.message
-                }
-                onRestore={() => {
-                  if (versionHistory.inspectSnapshotId) {
-                    versionHistory.executeRollback(versionHistory.inspectSnapshotId);
-                  }
-                }}
-                onBranchFromHere={() => {
-                  if (versionHistory.inspectSnapshotId) {
-                    const snap = versionHistory.snapshots.find(
-                      (s) => s.id === versionHistory.inspectSnapshotId
-                    );
-                    setBranchSourceSnapshotId(versionHistory.inspectSnapshotId);
-                    setBranchSourceMessage(snap?.message || null);
-                    setIsCreateBranchOpen(true);
-                  }
-                }}
-                onExit={versionHistory.exitInspectMode}
-                isRollingBack={versionHistory.isRollingBack}
-              />
-            )}
-
-            {previewError && (
-              <div className="p-3 bg-muted/40 border-b border-border">
-                <PreviewErrorBanner
-                  error={previewError}
-                  onRepair={(err) => {
-                    setMessages((prev) => [
-                      ...prev,
-                      {
-                        id: String(Date.now()),
-                        role: "assistant",
-                        content: `Initiating automated repair pass for: ${err.message.slice(0, 80)}`,
-                      },
-                    ]);
-                    triggerRepair(err);
-                  }}
-                  isRepairing={isStreaming && healingTelemetry.status === "in_progress"}
-                  remainingRetries={Math.max(0, 3 - healingTelemetry.totalRepairs)}
-                  onDismiss={() => setPreviewError(null)}
-                />
+          <div className="flex h-full w-full flex-col overflow-hidden">
+            {/* Top-Level Right Workbench Switcher (Preview | Database) */}
+            <div
+              role="tablist"
+              aria-label="Workbench surface"
+              className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-card/80 px-3"
+            >
+              <div className="inline-flex items-center gap-1 rounded-lg bg-muted p-0.5">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeWorkbenchTab === "preview"}
+                  onClick={() => handleSelectWorkbenchTab("preview")}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    activeWorkbenchTab === "preview"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <Monitor className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Preview</span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeWorkbenchTab === "database"}
+                  onClick={() => handleSelectWorkbenchTab("database")}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    activeWorkbenchTab === "database"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <Database className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Database</span>
+                  {databaseViewer.viewerMode === "STREAMING_LOCKED" ? (
+                    <Lock className="h-3 w-3 text-amber-500" aria-label="Read only locked" />
+                  ) : (
+                    databaseViewer.isDbReady && (
+                      <Badge
+                        variant="secondary"
+                        className="ml-0.5 h-4 px-1.5 font-mono text-[10px]"
+                      >
+                        {databaseViewer.tables.length}
+                      </Badge>
+                    )
+                  )}
+                </button>
               </div>
-            )}
+            </div>
 
-            <PreviewFrame
-              key={iframeKey}
-              iframeRef={iframeRef}
-              src={sandboxUrl}
-              device={device}
-              className="flex-1"
-            />
+            {/* Preview Container stays permanently mounted in DOM via CSS hidden (AC-4) */}
+            <div
+              className={cn(
+                "flex min-h-0 flex-1 flex-col",
+                activeWorkbenchTab !== "preview" && "hidden"
+              )}
+              aria-hidden={activeWorkbenchTab !== "preview"}
+            >
+              <PreviewToolbar
+                activeDevice={device}
+                onDeviceChange={setDevice}
+                onReload={handleReload}
+                currentPath={currentPath}
+                onNavigate={handleNavigate}
+                isConnected={isConnected}
+                sandboxUrl={sandboxUrl}
+                isInspectMode={isInspectMode}
+                onToggleInspect={handleToggleInspect}
+                isHistoryOpen={versionHistory.isDrawerOpen}
+                onToggleHistory={versionHistory.toggleDrawer}
+              />
+
+              {/* Inspect Mode Banner (AC-6) */}
+              {versionHistory.isInspectMode && versionHistory.inspectSnapshotId && (
+                <InspectModeBanner
+                  snapshotId={versionHistory.inspectSnapshotId}
+                  snapshotMessage={
+                    versionHistory.snapshots.find((s) => s.id === versionHistory.inspectSnapshotId)
+                      ?.message
+                  }
+                  onRestore={() => {
+                    if (versionHistory.inspectSnapshotId) {
+                      versionHistory.executeRollback(versionHistory.inspectSnapshotId);
+                    }
+                  }}
+                  onBranchFromHere={() => {
+                    if (versionHistory.inspectSnapshotId) {
+                      const snap = versionHistory.snapshots.find(
+                        (s) => s.id === versionHistory.inspectSnapshotId
+                      );
+                      setBranchSourceSnapshotId(versionHistory.inspectSnapshotId);
+                      setBranchSourceMessage(snap?.message || null);
+                      setIsCreateBranchOpen(true);
+                    }
+                  }}
+                  onExit={versionHistory.exitInspectMode}
+                  isRollingBack={versionHistory.isRollingBack}
+                />
+              )}
+
+              {previewError && (
+                <div className="p-3 bg-muted/40 border-b border-border">
+                  <PreviewErrorBanner
+                    error={previewError}
+                    onRepair={(err) => {
+                      setIsManualRepairSession(true);
+                      setMessages((prev) => [
+                        ...prev,
+                        {
+                          id: String(Date.now()),
+                          role: "assistant",
+                          content: `Initiating automated repair pass for: ${err.message.slice(0, 80)}`,
+                        },
+                      ]);
+                      triggerRepair(err, aiSettings.selectedModel);
+                    }}
+                    isRepairing={isStreaming && healingTelemetry.status === "in_progress"}
+                    remainingRetries={
+                      isManualRepairSession ? Math.max(0, 3 - healingTelemetry.totalRepairs) : 3
+                    }
+                    onDismiss={() => {
+                      setPreviewError(null);
+                      setIsManualRepairSession(false);
+                    }}
+                  />
+                </div>
+              )}
+
+              <PreviewFrame
+                key={iframeKey}
+                iframeRef={iframeRef}
+                src={sandboxUrl}
+                device={device}
+                className="flex-1"
+                onLoad={() => {
+                  if (!runnerReadyRef.current) {
+                    sendToPreview("PREVIEW_HEARTBEAT", { ping: true });
+                  }
+                }}
+              />
+            </div>
+
+            {/* Managed Database Viewer Panel stays mounted with CSS hidden to preserve subview/console state */}
+            <div
+              className={cn(
+                "flex min-h-0 flex-1 flex-col overflow-hidden",
+                activeWorkbenchTab !== "database" && "hidden"
+              )}
+              aria-hidden={activeWorkbenchTab !== "database"}
+            >
+              <DatabaseViewer
+                viewerMode={databaseViewer.viewerMode}
+                tables={databaseViewer.tables}
+                selectedTable={databaseViewer.selectedTable}
+                selectedTableName={databaseViewer.selectedTableName}
+                isIntrospecting={databaseViewer.isIntrospecting}
+                introspectError={databaseViewer.introspectError}
+                rows={databaseViewer.rows}
+                totalCount={databaseViewer.totalCount}
+                page={databaseViewer.page}
+                pageSize={databaseViewer.pageSize}
+                sortColumn={databaseViewer.sortColumn}
+                sortDirection={databaseViewer.sortDirection}
+                searchQuery={databaseViewer.searchQuery}
+                isLoadingRows={databaseViewer.isLoadingRows}
+                rowsError={databaseViewer.rowsError}
+                savedQueries={databaseViewer.savedQueries}
+                isLoadingQueries={databaseViewer.isLoadingQueries}
+                isExportingSeed={databaseViewer.isExportingSeed}
+                seedFeedback={databaseViewer.seedFeedback}
+                onDismissSeedFeedback={() => databaseViewer.setSeedFeedback(null)}
+                onSelectTable={databaseViewer.handleSelectTable}
+                onPageChange={databaseViewer.setPage}
+                onPageSizeChange={databaseViewer.setPageSize}
+                onSortChange={databaseViewer.handleSortChange}
+                onSearchChange={databaseViewer.handleSearchChange}
+                onRefreshAll={() => {
+                  databaseViewer.refreshActiveView().catch(() => {});
+                }}
+                onExecuteMutation={databaseViewer.executeMutation}
+                onExecuteRawSql={databaseViewer.executeRawSql}
+                onSaveSnippet={databaseViewer.saveQuerySnippet}
+                onUpdateSnippet={databaseViewer.updateQuerySnippet}
+                onDeleteSnippet={databaseViewer.deleteQuerySnippet}
+                onSaveSeedData={databaseViewer.exportAndSaveSeed}
+                onAskSparkSchema={(prompt) => {
+                  handlePromptSubmit(prompt, aiSettings.selectedModel);
+                }}
+              />
+            </div>
           </div>
         }
       />
@@ -532,6 +822,22 @@ export default function BuilderPage() {
         }}
         fromSnapshotId={branchSourceSnapshotId}
         fromSnapshotMessage={branchSourceMessage}
+      />
+
+      {/* AI Provider API Keys Modal (OpenRouter & Direct Providers) */}
+      <ApiKeysDialog
+        open={isApiKeysOpen}
+        onOpenChange={(open) => {
+          setIsApiKeysOpen(open);
+          if (!open) {
+            setHighlightedKeyProvider(null);
+          }
+        }}
+        configuredKeys={aiSettings.configuredKeys}
+        envProviders={aiSettings.envProviders}
+        highlightedProvider={highlightedKeyProvider}
+        onSaveKey={aiSettings.saveApiKey}
+        onRemoveKey={aiSettings.removeApiKey}
       />
     </BuilderShell>
   );

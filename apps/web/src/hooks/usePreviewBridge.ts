@@ -28,6 +28,7 @@ export function usePreviewBridge({ iframeRef, targetUrl, onMessage }: UsePreview
   const healthCheckResolverRef = useRef<((payload: PreviewHealthStatusPayload) => void) | null>(
     null
   );
+  const healthCheckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const targetOrigin = useMemo(() => resolveTargetOrigin(targetUrl), [targetUrl]);
 
   const sendToPreview = useCallback(
@@ -41,7 +42,11 @@ export function usePreviewBridge({ iframeRef, targetUrl, onMessage }: UsePreview
       };
 
       const iframeWindow = iframeRef.current?.contentWindow;
-      if (!iframeWindow || !isConnected || !targetOrigin) {
+      if (
+        !iframeWindow ||
+        !targetOrigin ||
+        (!isConnected && type !== "PREVIEW_BOOT" && type !== "PREVIEW_HEARTBEAT")
+      ) {
         pendingQueueRef.current.push(message);
         return;
       }
@@ -58,14 +63,25 @@ export function usePreviewBridge({ iframeRef, targetUrl, onMessage }: UsePreview
   const checkPreviewHealth = useCallback(
     (timeoutMs = 4000): Promise<PreviewHealthStatusPayload> => {
       return new Promise((resolve) => {
+        if (healthCheckTimeoutRef.current) {
+          clearTimeout(healthCheckTimeoutRef.current);
+          healthCheckTimeoutRef.current = null;
+        }
         healthCheckResolverRef.current = resolve;
         sendToPreview("PREVIEW_HEALTH_CHECK", { timeoutMs });
 
-        // Fallback safety timeout if iframe drops message
-        setTimeout(() => {
+        // Fallback safety timeout: an unresponsive runner is treated as unhealthy, never clean
+        healthCheckTimeoutRef.current = setTimeout(() => {
           if (healthCheckResolverRef.current === resolve) {
             healthCheckResolverRef.current = null;
-            resolve({ healthy: true });
+            healthCheckTimeoutRef.current = null;
+            resolve({
+              healthy: false,
+              error: {
+                category: "runtime",
+                message: "Preview runner health check timed out without response",
+              },
+            });
           }
         }, timeoutMs + 300);
       });
@@ -98,6 +114,10 @@ export function usePreviewBridge({ iframeRef, targetUrl, onMessage }: UsePreview
 
       if (bridgeMsg.type === "PREVIEW_HEALTH_STATUS") {
         const payload = bridgeMsg.payload as unknown as PreviewHealthStatusPayload;
+        if (healthCheckTimeoutRef.current) {
+          clearTimeout(healthCheckTimeoutRef.current);
+          healthCheckTimeoutRef.current = null;
+        }
         if (healthCheckResolverRef.current) {
           const resolver = healthCheckResolverRef.current;
           healthCheckResolverRef.current = null;

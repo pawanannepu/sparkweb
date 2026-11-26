@@ -15,12 +15,26 @@
       "skillPath": "skills/next-dev-loop/SKILL.md",
       "computedHash": "78ebafaabaa8fd170da34957943f5845436f66c04daf85a93fc759f38a50a4ca"
     },
+    "pglite": {
+      "source": "oakoss/agent-skills",
+      "commit": "85e3a3919d9e0ec7f7302a5143ec4b3e66f5f6ad",
+      "sourceType": "github",
+      "skillPath": "skills/pglite/SKILL.md",
+      "computedHash": "16eec2d767806d505d75c8b2c68afaa189a7f0936a306e24e5c7d514d77a9358"
+    },
     "playwright-test-generator": {
       "source": "voidmatcha/e2e-skills",
       "commit": "e9fb16b364b6c77a71a4a2421e95cd23b098d03f",
       "sourceType": "github",
       "skillPath": "skills/playwright-test-generator/SKILL.md",
       "computedHash": "e4cfaf010f9a979d26406f4a1222c09ef4f95564de6ac5d5704fc44e4dec9af1"
+    },
+    "tanstack-table": {
+      "source": "tanstack-skills/tanstack-skills",
+      "commit": "6f5521ecbdfbfa3d54d335eba6c8b4df0b804c03",
+      "sourceType": "github",
+      "skillPath": "plugins/tanstack-table/skills/tanstack-table/SKILL.md",
+      "computedHash": "235873fdbb88facf6b7df204a71b822e575e72cf3ce2c0628a0405b0d0db2620"
     },
     "turborepo": {
       "source": "vercel/turborepo",

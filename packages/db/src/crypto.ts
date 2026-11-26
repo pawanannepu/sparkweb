@@ -93,7 +93,10 @@ export function extractKeyHint(rawKey: string): string {
     return `***${trimmed.slice(-2)}`;
   }
 
-  // Support vendor prefixes like sk-ant, sk-proj, sk, gsk
+  // Support vendor prefixes like sk-or-v1, sk-ant, sk-proj, sk, gsk
+  if (trimmed.startsWith("sk-or-")) {
+    return `sk-or-...${trimmed.slice(-4)}`;
+  }
   if (trimmed.startsWith("sk-ant-")) {
     return `sk-ant-...${trimmed.slice(-4)}`;
   }

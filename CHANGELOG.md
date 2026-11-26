@@ -51,6 +51,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Read only inspect mode rendering historical application states in the live preview sandbox with an alert banner while locking inputs against accidental mutation (see spec 0007)
 - Non destructive forward rollback creating a new snapshot from historical files, preserving complete commit history and updating pointers atomically (see spec 0007)
 - Smart preview reload on rollback detecting package dependency differences to trigger clean container boot only when dependencies change (see spec 0007)
+- Relational `project_queries` schema and Drizzle migration in PostgreSQL and PGlite with cascade delete on `projects.id` and indexes on project creation time and favorites (see spec 0008)
+- Project query snippet REST endpoints (`GET` and `POST /api/projects/[id]/queries`, `PATCH` and `DELETE /api/projects/[id]/queries/[queryId]`) with Zod validation, favorite filtering, and UUID checks (see spec 0008)
+- Typed database bridge message contracts in `@spark/shared` (`DB_READY_EVENT`, `DB_INTROSPECT_*`, `DB_QUERY_*`, `DB_MUTATE_*`, `DB_MUTATED_EVENT`, `DB_EXPORT_SEED_*`) and two hop sandbox runner forwarding between the host workbench and preview application frame (see spec 0008)
+- Dedicated `Database` tab in the right workbench pane featuring a table sidebar with column metadata and row counts alongside a TanStack Table v8 data grid with manual pagination, sorting, and search filtering (see spec 0008)
+- Visual CRUD controls supporting inline cell editing with type validation, an `Add Record` slide over sheet respecting identity and defaulted columns, a `Delete Row` confirmation modal, and bidirectional `DB_MUTATED_EVENT` refresh notifications (see spec 0008)
+- Interactive CodeMirror 6 SQL Console with PostgreSQL syntax highlighting, schema autocompletion, execution timing in milliseconds, saved snippet pinning and management, and destructive statement confirmation dialogs for `DROP`, `TRUNCATE`, and unfiltered `DELETE` queries (see spec 0008)
+- Seed snapshot export (`POST /api/projects/[id]/database/seed`) serializing PGlite tables into foreign key ordered `INSERT` statements with sequence resets into `seed.sql` snapshots tagged `database_seed` (see spec 0008)
+- Database viewer lifecycle states (`BOOTING`, `EMPTY`, `READY`, `STREAMING_LOCKED`) with booting skeletons, guided empty state schema prompt chips, toolbar prompt bar routing to builder chat, and deferred `seed.sql` replay after DDL creation (see spec 0008)
 
 ### Changed
 - Builder workbench default preview target points to the active WebContainer sandbox runner route (see spec 0004)
@@ -60,6 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preview runner listens for hot module replacement events and responds to health verification probes (see spec 0006)
 - Builder workbench toolbar integrates branch switching and version history sliding drawer controls (see spec 0007)
 - New projects automatically provision a default main branch upon creation (see spec 0007)
+- Right workbench pane keeps `PreviewFrame` continuously mounted in the DOM using CSS `hidden` when viewing the `Database` tab so in browser PGlite state persists across tab switches (see spec 0008)
+- Sandbox runner and starter template serialize concurrent container boots, upgrade legacy database templates, and bundle the in app `spark-db-bridge.ts` helper for PGlite introspection and write notifications (see spec 0008)
 
 ### Security
 - Encrypted storage for personal provider credentials at rest with authentication tag tamper verification (see spec 0002)
@@ -73,3 +83,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Branch protection forbidding deletion of the default main branch or currently active branch (see spec 0007)
 - Deployment protection preventing deletion of snapshots linked to active deployments (see spec 0007)
 - Strict workspace ownership validation verifying project ownership on all snapshot, diff, branch, and rollback endpoints (see spec 0007)
+- Parameterized SQL query bindings (`$1`, `$2`) and identifier quoting for visual table browsing and CRUD mutations, with keyless tables marked read only (see spec 0008)
+- Streaming lock mode disabling visual edit controls and `seed.sql` snapshot commits (HTTP 409 Conflict) while AI generation or repair is active (see spec 0008)
+- Project owner isolation and session checks on saved query snippet and seed snapshot API routes, plus a 500KB payload limit on `seed.sql` snapshots (see spec 0008)

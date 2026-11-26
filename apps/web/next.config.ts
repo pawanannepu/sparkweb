@@ -18,6 +18,10 @@ const nextConfig: NextConfig = {
 
     return [
       {
+        source: "/",
+        headers: crossOriginIsolationHeaders,
+      },
+      {
         source: "/sandbox/:path*",
         headers: crossOriginIsolationHeaders,
       },

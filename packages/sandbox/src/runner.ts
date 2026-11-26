@@ -10,6 +10,7 @@ import {
   filterSourceFiles,
   STARTER_TEMPLATE_FILES,
   toWebContainerFileSystemTree,
+  upgradeLegacyDbTemplate,
 } from "./template";
 
 export interface WebContainerRunnerCallbacks {
@@ -21,6 +22,7 @@ export interface WebContainerRunnerCallbacks {
 
 export class WebContainerRunner {
   private container: WebContainer | null = null;
+  private bootPromise: Promise<string> | null = null;
   private status: PreviewStatus = "idle";
   private serverUrl: string | null = null;
   private devProcess: WebContainerProcess | null = null;
@@ -44,6 +46,17 @@ export class WebContainerRunner {
   }
 
   public async boot(files?: SnapshotFilesMap): Promise<string> {
+    if (this.bootPromise) {
+      return this.bootPromise;
+    }
+
+    this.bootPromise = this.runBoot(files).finally(() => {
+      this.bootPromise = null;
+    });
+    return this.bootPromise;
+  }
+
+  private async runBoot(files?: SnapshotFilesMap): Promise<string> {
     try {
       this.setStatus("booting");
       this.callbacks.onLog?.("Booting in-browser WebContainer runtime...");
@@ -53,7 +66,7 @@ export class WebContainerRunner {
       }
 
       const filesToMount = files && Object.keys(files).length > 0 ? files : STARTER_TEMPLATE_FILES;
-      const cleanFiles = filterSourceFiles(filesToMount);
+      const cleanFiles = upgradeLegacyDbTemplate(filterSourceFiles(filesToMount));
       const fsTree = toWebContainerFileSystemTree(cleanFiles);
 
       await this.container.mount(fsTree);
@@ -78,6 +91,14 @@ export class WebContainerRunner {
       }
 
       this.callbacks.onLog?.("Starting Vite dev server...");
+      if (this.devProcess) {
+        try {
+          this.devProcess.kill();
+        } catch {
+          // Ignore prior dev process termination errors
+        }
+        this.devProcess = null;
+      }
       this.devProcess = await this.container.spawn("npm", ["run", "dev"]);
 
       this.devProcess.output.pipeTo(

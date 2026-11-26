@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import type { FileOperation, HealingTelemetry, PlanStep, PreviewErrorPayload } from "@spark/shared";
@@ -41,6 +42,37 @@ describe("PromptComposer Component", () => {
 
     fireEvent.click(stopBtn);
     expect(onCancel).toHaveBeenCalled();
+  });
+
+  it("allows filtering OpenRouter free/paid models and picking a custom OpenRouter model ID", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<PromptComposer onSubmit={onSubmit} />);
+
+    await user.click(screen.getByRole("button", { name: /select ai model/i }));
+
+    // Filter by Free OpenRouter models
+    await user.click(screen.getByRole("button", { name: "Free" }));
+    expect(screen.getByText("Qwen 2.5 Coder 32B")).toBeInTheDocument();
+    expect(screen.queryByText("Claude Sonnet 4")).not.toBeInTheDocument();
+
+    // Enter a custom OpenRouter model slug and select it
+    const searchInput = screen.getByLabelText(
+      /Search AI models or enter custom OpenRouter model ID/i
+    );
+    await user.type(searchInput, "nvidia/llama-3.1-nemotron-70b-instruct:free");
+    await user.click(
+      screen.getByText(/Use custom: nvidia\/llama-3\.1-nemotron-70b-instruct:free/i)
+    );
+
+    const textarea = screen.getByPlaceholderText(/Describe the application or component/i);
+    fireEvent.change(textarea, { target: { value: "Build a dashboard" } });
+    await user.click(screen.getByRole("button", { name: /generate/i }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      "Build a dashboard",
+      "nvidia/llama-3.1-nemotron-70b-instruct:free"
+    );
   });
 });
 
@@ -192,5 +224,79 @@ describe("PreviewErrorBanner Component", () => {
 
     const repairingBtn = screen.getByRole("button", { name: /repairing preview/i });
     expect(repairingBtn).toBeDisabled();
+  });
+
+  // covers: AC-5, AC-6
+  it("toggles healing attempt details and renders exhausted warning on GenerationProgressCard", async () => {
+    const user = userEvent.setup();
+    const telemetry: HealingTelemetry = {
+      status: "exhausted",
+      totalRepairs: 3,
+      attempts: [
+        {
+          attemptIndex: 1,
+          errorFingerprint: "fp-1",
+          category: "syntax",
+          message: "Unexpected token in App.tsx",
+          filePath: "src/App.tsx",
+          patchFiles: ["src/App.tsx"],
+          status: "unfixable",
+          timestamp: Date.now(),
+        },
+      ],
+    };
+
+    render(
+      <GenerationProgressCard
+        isStreaming={false}
+        planSteps={[]}
+        fileOperations={[]}
+        healingTelemetry={telemetry}
+      />
+    );
+
+    expect(
+      screen.getByText("Self healing attempts exhausted (3 attempt limit)")
+    ).toBeInTheDocument();
+    expect(screen.getByText("Unexpected token in App.tsx")).toBeInTheDocument();
+
+    const hideBtn = screen.getByRole("button", { name: /hide details/i });
+    await user.click(hideBtn);
+
+    expect(screen.queryByText("Unexpected token in App.tsx")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /show details/i })).toBeInTheDocument();
+  });
+
+  // covers: AC-8 (accessibility)
+  it("exposes accessible names and keyboard focus on PreviewErrorBanner action buttons", async () => {
+    const user = userEvent.setup();
+    const onRepair = vi.fn();
+    const onDismiss = vi.fn();
+
+    render(
+      <PreviewErrorBanner
+        error={{
+          message: "Uncaught ReferenceError: chart is not defined",
+          filename: "src/App.tsx",
+          category: "runtime",
+        }}
+        onRepair={onRepair}
+        onDismiss={onDismiss}
+        remainingRetries={3}
+      />
+    );
+
+    const repairBtn = screen.getByRole("button", { name: /repair in sparkweb \(3 tries left\)/i });
+    const dismissBtn = screen.getByRole("button", { name: /dismiss/i });
+
+    await user.tab();
+    expect(repairBtn).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(onRepair).toHaveBeenCalledTimes(1);
+
+    await user.tab();
+    expect(dismissBtn).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });

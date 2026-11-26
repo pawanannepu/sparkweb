@@ -10,10 +10,13 @@ import {
 } from "./errors";
 import { runPgliteMigrations } from "./migrate";
 import {
+  checkActiveGeneration,
   createBranch,
   createDeployment,
   createProject,
+  createProjectQuery,
   deleteBranch,
+  deleteProjectQuery,
   deleteSnapshot,
   getDecryptedApiKey,
   getPaginatedSnapshots,
@@ -22,12 +25,14 @@ import {
   getProjectWithCurrentSnapshot,
   getSnapshotById,
   getUserApiKeys,
+  listProjectQueries,
   recordPromptMessage,
   rollbackSnapshot,
   saveSnapshot,
   saveUserApiKey,
   slugify,
   switchBranch,
+  updateProjectQuery,
   updatePromptMessage,
 } from "./queries";
 import { users } from "./schema/index";
@@ -749,6 +754,188 @@ describe("db queries and migration integration with PGlite", () => {
           branchId: "00000000-0000-0000-0000-000000000099",
         })
       ).rejects.toThrow(NotFoundError);
+    });
+
+    it("creates, lists, filters, updates, and deletes project_queries snippets (AC-1, AC-2)", async () => {
+      const project = await createProject(testDb, {
+        userId: userAId,
+        name: "Queries Snippet App",
+      });
+
+      const q1 = await createProjectQuery(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        title: "Count items",
+        sql: "SELECT COUNT(*) FROM demo_items;",
+        isFavorite: false,
+      });
+
+      const q2 = await createProjectQuery(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        title: "Recent items",
+        sql: "SELECT * FROM demo_items ORDER BY created_at DESC LIMIT 10;",
+        description: "Latest rows",
+        isFavorite: true,
+      });
+
+      const all = await listProjectQueries(testDb, {
+        projectId: project.id,
+        userId: userAId,
+      });
+      expect(all).toHaveLength(2);
+
+      const favs = await listProjectQueries(testDb, {
+        projectId: project.id,
+        userId: userAId,
+        favorite: true,
+      });
+      expect(favs).toHaveLength(1);
+      expect(favs[0]?.id).toBe(q2.id);
+
+      const updated = await updateProjectQuery(testDb, {
+        projectId: project.id,
+        queryId: q1.id,
+        userId: userAId,
+        isFavorite: true,
+        title: "Total item count",
+      });
+      expect(updated.isFavorite).toBe(true);
+      expect(updated.title).toBe("Total item count");
+
+      // Non-owner cannot list or mutate snippets
+      await expect(
+        listProjectQueries(testDb, { projectId: project.id, userId: userBId })
+      ).rejects.toThrow(ForbiddenError);
+
+      await deleteProjectQuery(testDb, {
+        projectId: project.id,
+        queryId: q1.id,
+        userId: userAId,
+      });
+
+      await expect(
+        deleteProjectQuery(testDb, {
+          projectId: project.id,
+          queryId: q1.id,
+          userId: userAId,
+        })
+      ).rejects.toThrow(NotFoundError);
+    });
+
+    it("ignores stale streaming prompt messages older than the active generation TTL in checkActiveGeneration", async () => {
+      const project = await createProject(testDb, {
+        userId: userAId,
+        name: "Stale Streaming Guard App",
+      });
+
+      const { promptMessages, promptThreads } = await import("./schema/index");
+      const [thread] = await testDb
+        .insert(promptThreads)
+        .values({
+          projectId: project.id,
+          title: "Stale thread",
+        })
+        .returning();
+      if (!thread) throw new Error("Failed to create thread");
+
+      const twentyMinutesAgo = new Date(Date.now() - 20 * 60 * 1000);
+      await testDb.insert(promptMessages).values({
+        threadId: thread.id,
+        seq: 1,
+        role: "assistant",
+        content: "",
+        status: "streaming",
+        createdAt: twentyMinutesAgo,
+      });
+
+      expect(await checkActiveGeneration(testDb, { projectId: project.id })).toBe(false);
+
+      await testDb.insert(promptMessages).values({
+        threadId: thread.id,
+        seq: 2,
+        role: "assistant",
+        content: "",
+        status: "streaming",
+        createdAt: new Date(),
+      });
+
+      expect(await checkActiveGeneration(testDb, { projectId: project.id })).toBe(true);
+    });
+
+    // covers: AC-1, AC-2
+    it("validates query snippet inputs, isolates across projects, and cascades on project delete", async () => {
+      const projectA = await createProject(testDb, {
+        userId: userAId,
+        name: "Snippet Isolation A",
+      });
+      const projectB = await createProject(testDb, {
+        userId: userAId,
+        name: "Snippet Isolation B",
+      });
+
+      await expect(
+        createProjectQuery(testDb, {
+          projectId: projectA.id,
+          userId: userAId,
+          title: "   ",
+          sql: "SELECT 1;",
+        })
+      ).rejects.toThrow(ValidationError);
+
+      await expect(
+        createProjectQuery(testDb, {
+          projectId: projectA.id,
+          userId: userAId,
+          title: "Valid title",
+          sql: "   ",
+        })
+      ).rejects.toThrow(ValidationError);
+
+      const snippetA = await createProjectQuery(testDb, {
+        projectId: projectA.id,
+        userId: userAId,
+        title: "Project A snippet",
+        sql: "SELECT 1;",
+      });
+
+      await expect(
+        updateProjectQuery(testDb, {
+          projectId: projectA.id,
+          queryId: snippetA.id,
+          userId: userAId,
+          title: "   ",
+        })
+      ).rejects.toThrow(ValidationError);
+
+      // Cannot update or delete snippetA through projectB
+      await expect(
+        updateProjectQuery(testDb, {
+          projectId: projectB.id,
+          queryId: snippetA.id,
+          userId: userAId,
+          title: "Cross-project hijack",
+        })
+      ).rejects.toThrow(NotFoundError);
+
+      await expect(
+        deleteProjectQuery(testDb, {
+          projectId: projectB.id,
+          queryId: snippetA.id,
+          userId: userAId,
+        })
+      ).rejects.toThrow(NotFoundError);
+
+      // Deleting parent project cascades to project_queries
+      const { eq } = await import("drizzle-orm");
+      const { projectQueries, projects } = await import("./schema/index");
+      await testDb.delete(projects).where(eq(projects.id, projectA.id));
+
+      const remaining = await testDb
+        .select()
+        .from(projectQueries)
+        .where(eq(projectQueries.projectId, projectA.id));
+      expect(remaining).toHaveLength(0);
     });
   });
 });

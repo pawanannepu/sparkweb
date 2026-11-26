@@ -3,6 +3,7 @@ import type { apiKeys } from "./api-keys";
 import type { accounts, sessions, users, verificationTokens } from "./auth";
 import type { deployments } from "./deployments";
 import type { projectBranches } from "./project-branches";
+import type { projectQueries } from "./project-queries";
 import type { projects } from "./projects";
 import type { promptMessages, promptThreads } from "./prompt-threads";
 import type { snapshots } from "./snapshots";
@@ -11,6 +12,7 @@ export * from "./api-keys";
 export * from "./auth";
 export * from "./deployments";
 export * from "./project-branches";
+export * from "./project-queries";
 export * from "./projects";
 export * from "./prompt-threads";
 export * from "./snapshots";
@@ -47,3 +49,6 @@ export type NewSnapshot = InferInsertModel<typeof snapshots>;
 
 export type Deployment = InferSelectModel<typeof deployments>;
 export type NewDeployment = InferInsertModel<typeof deployments>;
+
+export type ProjectQuery = InferSelectModel<typeof projectQueries>;
+export type NewProjectQuery = InferInsertModel<typeof projectQueries>;

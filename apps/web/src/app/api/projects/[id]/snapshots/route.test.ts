@@ -57,6 +57,11 @@ describe("POST /api/projects/[id]/snapshots", () => {
 
     mockSelect.mockReturnValue({
       from: vi.fn().mockReturnValue({
+        innerJoin: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([mockProject]),
+          }),
+        }),
         where: vi.fn().mockReturnValue({
           limit: vi.fn().mockResolvedValue([mockProject]),
         }),
@@ -249,6 +254,148 @@ describe("POST /api/projects/[id]/snapshots", () => {
       expect.anything(),
       expect.objectContaining({
         message: expect.stringContaining("[Unverified - healing exhausted]"),
+      })
+    );
+  });
+
+  // covers: AC-7
+  it("returns 404 Not Found and skips persistence when messageId does not belong to target project", async () => {
+    vi.mocked(getCurrentUser).mockResolvedValueOnce(mockUser);
+
+    mockSelect
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([mockProject]),
+          }),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          innerJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              limit: vi.fn().mockResolvedValue([]),
+            }),
+          }),
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      });
+
+    const req = new NextRequest("http://localhost:3000/api/projects/proj-123/snapshots", {
+      method: "POST",
+      body: JSON.stringify({
+        files: { "src/App.tsx": { content: "export default function App() {}" } },
+        messageId: "foreign-msg-999",
+      }),
+    });
+
+    const res = await POST(req, { params: Promise.resolve({ id: "proj-123" }) });
+    expect(res.status).toBe(404);
+    expect(mockSaveSnapshot).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  // covers: AC-7
+  it("returns 400 Bad Request when files field is missing from payload", async () => {
+    vi.mocked(getCurrentUser).mockResolvedValueOnce(mockUser);
+
+    const req = new NextRequest("http://localhost:3000/api/projects/proj-123/snapshots", {
+      method: "POST",
+      body: JSON.stringify({ message: "Missing files map" }),
+    });
+
+    const res = await POST(req, { params: Promise.resolve({ id: "proj-123" }) });
+    expect(res.status).toBe(400);
+  });
+
+  // covers: AC-7
+  it("does not duplicate exhausted prefix when message already mentions exhausted", async () => {
+    vi.mocked(getCurrentUser).mockResolvedValueOnce(mockUser);
+
+    const req = new NextRequest("http://localhost:3000/api/projects/proj-123/snapshots", {
+      method: "POST",
+      body: JSON.stringify({
+        files: { "src/App.tsx": { content: "export default function App() {}" } },
+        message: "[Unverified - healing exhausted] Build broken app",
+        status: "exhausted",
+      }),
+    });
+
+    const res = await POST(req, { params: Promise.resolve({ id: "proj-123" }) });
+    expect(res.status).toBe(200);
+    expect(mockSaveSnapshot).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        message: "[Unverified - healing exhausted] Build broken app",
+      })
+    );
+  });
+
+  // covers: AC-7
+  it("merges healing telemetry with existing promptMessages toolCalls without overwriting plan", async () => {
+    vi.mocked(getCurrentUser).mockResolvedValueOnce(mockUser);
+
+    const mockSet = vi.fn().mockReturnValue({
+      where: vi.fn().mockResolvedValue({}),
+    });
+    mockUpdate.mockReturnValueOnce({ set: mockSet });
+
+    mockSelect
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([mockProject]),
+          }),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          innerJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              limit: vi.fn().mockResolvedValue([
+                {
+                  toolCalls: {
+                    plan: [{ id: "step-1", title: "Plan", status: "completed" }],
+                    model: "claude-3-7-sonnet",
+                  },
+                },
+              ]),
+            }),
+          }),
+        }),
+      });
+
+    const telemetry = {
+      status: "healed" as const,
+      totalRepairs: 1,
+      attempts: [],
+    };
+
+    const req = new NextRequest("http://localhost:3000/api/projects/proj-123/snapshots", {
+      method: "POST",
+      body: JSON.stringify({
+        files: { "src/App.tsx": { content: "export default function App() {}" } },
+        messageId: "msg-123",
+        healingTelemetry: telemetry,
+        status: "healed",
+      }),
+    });
+
+    const res = await POST(req, { params: Promise.resolve({ id: "proj-123" }) });
+    expect(res.status).toBe(200);
+
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshotId: "snapshot-test-uuid",
+        status: "completed",
+        toolCalls: expect.objectContaining({
+          plan: [{ id: "step-1", title: "Plan", status: "completed" }],
+          model: "claude-3-7-sonnet",
+          healing: telemetry,
+          verificationStatus: "healed",
+        }),
       })
     );
   });

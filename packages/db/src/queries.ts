@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, desc, eq, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, gt, type SQL, sql } from "drizzle-orm";
 import type { PgDatabase } from "drizzle-orm/pg-core";
 import { computeSnapshotTreeHash, decryptApiKey, encryptApiKey, extractKeyHint } from "./crypto";
 import {
@@ -16,8 +16,10 @@ import {
   deployments,
   type Project,
   type ProjectBranch,
+  type ProjectQuery,
   type PromptMessage,
   projectBranches,
+  projectQueries,
   projects,
   promptMessages,
   promptThreads,
@@ -489,16 +491,24 @@ export async function saveSnapshot(
   return createdSnapshot;
 }
 
+/** Maximum age for a `streaming` prompt message to be treated as actively running. */
+export const ACTIVE_GENERATION_TTL_MS = 10 * 60 * 1000;
+
 export async function checkActiveGeneration(
   db: DatabaseClient,
-  params: { projectId: string }
+  params: { projectId: string; staleAfterMs?: number }
 ): Promise<boolean> {
+  const cutoff = new Date(Date.now() - (params.staleAfterMs ?? ACTIVE_GENERATION_TTL_MS));
   const streamingMessages = await db
     .select({ id: promptMessages.id })
     .from(promptMessages)
     .innerJoin(promptThreads, eq(promptMessages.threadId, promptThreads.id))
     .where(
-      and(eq(promptThreads.projectId, params.projectId), eq(promptMessages.status, "streaming"))
+      and(
+        eq(promptThreads.projectId, params.projectId),
+        eq(promptMessages.status, "streaming"),
+        gt(promptMessages.createdAt, cutoff)
+      )
     )
     .limit(1);
 
@@ -1116,6 +1126,27 @@ export async function getDecryptedApiKey(
   );
 }
 
+export async function deleteUserApiKey(
+  db: DatabaseClient,
+  params: { userId: string; provider: string }
+): Promise<boolean> {
+  if (!params.userId || !params.provider) {
+    throw new ValidationError("userId and provider are required");
+  }
+
+  const deleted = await db
+    .delete(apiKeys)
+    .where(
+      and(
+        eq(apiKeys.userId, params.userId),
+        eq(apiKeys.provider, params.provider.toLowerCase().trim())
+      )
+    )
+    .returning({ id: apiKeys.id });
+
+  return deleted.length > 0;
+}
+
 export interface CreateDeploymentParams {
   projectId: string;
   userId: string;
@@ -1226,6 +1257,172 @@ export async function deleteSnapshot(
   }
 
   await db.delete(snapshots).where(eq(snapshots.id, params.id));
+
+  return { success: true };
+}
+
+async function verifyProjectOwnership(
+  db: DatabaseClient,
+  projectId: string,
+  userId: string
+): Promise<void> {
+  const rows = await db
+    .select({ id: projects.id, userId: projects.userId })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .limit(1);
+
+  const project = rows[0];
+  if (!project) {
+    throw new NotFoundError(`Project ${projectId} not found`);
+  }
+  if (project.userId !== userId) {
+    throw new ForbiddenError("You do not have access to this project");
+  }
+}
+
+export async function listProjectQueries(
+  db: DatabaseClient,
+  params: { projectId: string; userId: string; favorite?: boolean }
+): Promise<ProjectQuery[]> {
+  await verifyProjectOwnership(db, params.projectId, params.userId);
+
+  const conditions = [
+    eq(projectQueries.projectId, params.projectId),
+    params.favorite !== undefined ? eq(projectQueries.isFavorite, params.favorite) : undefined,
+  ].filter(Boolean);
+
+  return db
+    .select()
+    .from(projectQueries)
+    .where(and(...conditions))
+    .orderBy(desc(projectQueries.createdAt));
+}
+
+export async function createProjectQuery(
+  db: DatabaseClient,
+  params: {
+    projectId: string;
+    userId: string;
+    title: string;
+    sql: string;
+    description?: string | null;
+    isFavorite?: boolean;
+  }
+): Promise<ProjectQuery> {
+  await verifyProjectOwnership(db, params.projectId, params.userId);
+
+  const title = params.title.trim();
+  const sqlText = params.sql.trim();
+  if (!title) {
+    throw new ValidationError("Query title is required");
+  }
+  if (!sqlText) {
+    throw new ValidationError("SQL query text is required");
+  }
+
+  const rows = await db
+    .insert(projectQueries)
+    .values({
+      projectId: params.projectId,
+      title,
+      sql: sqlText,
+      description: params.description?.trim() || null,
+      isFavorite: params.isFavorite ?? false,
+    })
+    .returning();
+
+  const created = rows[0];
+  if (!created) {
+    throw new Error("Failed to create project query snippet");
+  }
+  return created;
+}
+
+export async function updateProjectQuery(
+  db: DatabaseClient,
+  params: {
+    projectId: string;
+    queryId: string;
+    userId: string;
+    title?: string;
+    sql?: string;
+    description?: string | null;
+    isFavorite?: boolean;
+  }
+): Promise<ProjectQuery> {
+  await verifyProjectOwnership(db, params.projectId, params.userId);
+
+  const existing = await db
+    .select()
+    .from(projectQueries)
+    .where(
+      and(eq(projectQueries.id, params.queryId), eq(projectQueries.projectId, params.projectId))
+    )
+    .limit(1);
+
+  if (existing.length === 0) {
+    throw new NotFoundError(`Query snippet ${params.queryId} not found`);
+  }
+
+  const updates: Partial<{
+    title: string;
+    sql: string;
+    description: string | null;
+    isFavorite: boolean;
+    updatedAt: Date;
+  }> = {
+    updatedAt: new Date(),
+  };
+
+  if (params.title !== undefined) {
+    const trimmed = params.title.trim();
+    if (!trimmed) throw new ValidationError("Query title cannot be empty");
+    updates.title = trimmed;
+  }
+  if (params.sql !== undefined) {
+    const trimmed = params.sql.trim();
+    if (!trimmed) throw new ValidationError("SQL query text cannot be empty");
+    updates.sql = trimmed;
+  }
+  if (params.description !== undefined) {
+    updates.description = params.description === null ? null : params.description.trim() || null;
+  }
+  if (params.isFavorite !== undefined) {
+    updates.isFavorite = params.isFavorite;
+  }
+
+  const rows = await db
+    .update(projectQueries)
+    .set(updates)
+    .where(
+      and(eq(projectQueries.id, params.queryId), eq(projectQueries.projectId, params.projectId))
+    )
+    .returning();
+
+  const updated = rows[0];
+  if (!updated) {
+    throw new NotFoundError(`Query snippet ${params.queryId} not found`);
+  }
+  return updated;
+}
+
+export async function deleteProjectQuery(
+  db: DatabaseClient,
+  params: { projectId: string; queryId: string; userId: string }
+): Promise<{ success: true }> {
+  await verifyProjectOwnership(db, params.projectId, params.userId);
+
+  const deleted = await db
+    .delete(projectQueries)
+    .where(
+      and(eq(projectQueries.id, params.queryId), eq(projectQueries.projectId, params.projectId))
+    )
+    .returning({ id: projectQueries.id });
+
+  if (deleted.length === 0) {
+    throw new NotFoundError(`Query snippet ${params.queryId} not found`);
+  }
 
   return { success: true };
 }

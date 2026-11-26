@@ -107,6 +107,9 @@ import sparkInspector from "./plugins/spark-inspector.js";
 
 export default defineConfig({
   plugins: [react(), sparkInspector()],
+  optimizeDeps: {
+    exclude: ["@electric-sql/pglite"],
+  },
   server: {
     host: true,
     port: 5173,
@@ -472,6 +475,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
 import "./spark-inspector-client";
+import "./spark-db-bridge";
 
 const rootElement = document.getElementById("root");
 if (rootElement) {
@@ -481,6 +485,437 @@ if (rootElement) {
     </React.StrictMode>
   );
 }
+`,
+  },
+  "src/spark-db-bridge.ts": {
+    content: `// In-app PGlite bridge client for Sparkweb Managed Database Viewer
+import { getRawDb } from "./lib/db";
+
+const BRIDGE_PROTOCOL = "sparkweb:bridge:v1";
+const DB_TIMEOUT_MS = 10_000;
+
+function postToParent(type: string, payload: Record<string, unknown> = {}) {
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage(
+      {
+        protocol: BRIDGE_PROTOCOL,
+        type,
+        source: "sparkweb:sandbox",
+        payload,
+        timestamp: Date.now(),
+      },
+      "*"
+    );
+  }
+}
+
+export function notifyDbMutated(origin: "app" | "viewer", table?: string) {
+  postToParent("DB_MUTATED_EVENT", { origin, ...(table ? { table } : {}) });
+  window.dispatchEvent(
+    new CustomEvent("spark:db-mutated", {
+      detail: { origin, table },
+    })
+  );
+}
+
+function quoteIdent(id: string): string {
+  if (!id) throw new Error("SQL identifier cannot be empty");
+  return \`"\${id.replace(/"/g, '""')}"\`;
+}
+
+function toSqlLiteral(value: unknown, colType?: string): string {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "NULL";
+  if (typeof value === "bigint") return value.toString();
+  if (value instanceof Date) return \`'\${value.toISOString().replace(/'/g, "''")}'\`;
+  if (value instanceof Uint8Array) {
+    const hex = Array.from(value).map((b) => b.toString(16).padStart(2, "0")).join("");
+    return \`'\\\\x\${hex}'::bytea\`;
+  }
+  if (typeof value === "object") {
+    const json = JSON.stringify(value).replace(/'/g, "''");
+    return colType && colType.includes("json") ? \`'\${json}'::\${colType}\` : \`'\${json}'\`;
+  }
+  return \`'\${String(value).replace(/'/g, "''")}'\`;
+}
+
+function serializeRows(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  return rows.map((row) => {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(row)) {
+      if (v instanceof Date) out[k] = v.toISOString();
+      else if (typeof v === "bigint") out[k] = v.toString();
+      else if (v instanceof Uint8Array) out[k] = Array.from(v);
+      else out[k] = v;
+    }
+    return out;
+  });
+}
+
+function detectWriteTable(rawSql: string): { isWrite: boolean; table?: string } {
+  const cleaned = rawSql
+    .replace(/--[^\\n]*/g, " ")
+    .replace(/\\/\\*[\\s\\S]*?\\*\\//g, " ")
+    .replace(/'(?:''|[^'])*'/g, "''")
+    .trim();
+  if (!cleaned) return { isWrite: false };
+  const match = cleaned.match(
+    /\\b(INSERT\\s+INTO|UPDATE|DELETE\\s+FROM|TRUNCATE\\s+(?:TABLE\\s+)?|CREATE\\s+TABLE(?:\\s+IF\\s+NOT\\s+EXISTS)?|ALTER\\s+TABLE|DROP\\s+TABLE(?:\\s+IF\\s+EXISTS)?)\\s+(?:"?public"?\\.)?"?([a-zA-Z_][a-zA-Z0-9_$]*)"?/i
+  );
+  if (match) return { isWrite: true, table: match[2] };
+  if (/\\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE)\\b/i.test(cleaned)) {
+    return { isWrite: true };
+  }
+  return { isWrite: false };
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms = DB_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(\`Query timed out after \${Math.round(ms / 1000)} seconds\`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function introspectTables() {
+  const db = await getRawDb();
+  const tablesRes = await db.query<{ table_name: string }>(
+    \`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name ASC\`
+  );
+  const colsRes = await db.query<{
+    table_name: string;
+    column_name: string;
+    data_type: string;
+    udt_name: string;
+    is_nullable: string;
+    column_default: string | null;
+    is_identity: string;
+  }>(
+    \`SELECT table_name, column_name, data_type, udt_name, is_nullable, column_default, is_identity FROM information_schema.columns WHERE table_schema = 'public' ORDER BY table_name ASC, ordinal_position ASC\`
+  );
+  const pkRes = await db.query<{ table_name: string; column_name: string }>(
+    \`SELECT c.relname AS table_name, a.attname AS column_name FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey) WHERE n.nspname = 'public' AND i.indisprimary\`
+  );
+  const enumRes = await db.query<{ type_name: string; enum_label: string }>(
+    \`SELECT t.typname AS type_name, e.enumlabel AS enum_label FROM pg_type t JOIN pg_enum e ON t.oid = e.enumtypid JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = 'public' ORDER BY t.typname ASC, e.enumsortorder ASC\`
+  );
+
+  const pkByTable = new Map<string, Set<string>>();
+  for (const r of pkRes.rows) {
+    const s = pkByTable.get(r.table_name) ?? new Set<string>();
+    s.add(r.column_name);
+    pkByTable.set(r.table_name, s);
+  }
+
+  const enumsByType = new Map<string, string[]>();
+  for (const r of enumRes.rows) {
+    const list = enumsByType.get(r.type_name) ?? [];
+    list.push(r.enum_label);
+    enumsByType.set(r.type_name, list);
+  }
+
+  const colsByTable = new Map<string, any[]>();
+  for (const c of colsRes.rows) {
+    const isPrimaryKey = Boolean(pkByTable.get(c.table_name)?.has(c.column_name));
+    const isIdentity = c.is_identity === "YES" || Boolean(c.column_default?.startsWith("nextval("));
+    const resolvedType = c.data_type === "USER-DEFINED" ? c.udt_name : c.data_type;
+    const enumValues = enumsByType.get(c.udt_name);
+    const list = colsByTable.get(c.table_name) ?? [];
+    list.push({
+      name: c.column_name,
+      type: resolvedType,
+      nullable: c.is_nullable === "YES",
+      isPrimaryKey,
+      isIdentity,
+      defaultValue: c.column_default,
+      ...(enumValues ? { enumValues } : {}),
+    });
+    colsByTable.set(c.table_name, list);
+  }
+
+  const tables = [];
+  for (const t of tablesRes.rows) {
+    const cols = colsByTable.get(t.table_name) ?? [];
+    let rowCount = 0;
+    try {
+      const cnt = await db.query<{ count: number }>(\`SELECT COUNT(*)::int AS count FROM \${quoteIdent(t.table_name)}\`);
+      rowCount = Number(cnt.rows[0]?.count ?? 0);
+    } catch {
+      rowCount = 0;
+    }
+    tables.push({
+      name: t.table_name,
+      isReadOnly: !cols.some((c) => c.isPrimaryKey),
+      rowCount,
+      columns: cols,
+    });
+  }
+  return tables;
+}
+
+async function handleQuery(payload: any) {
+  const start = performance.now();
+  try {
+    const db = await getRawDb();
+    return await withTimeout((async () => {
+      await db.exec("SET statement_timeout = '10s'");
+      if (payload.rawSql !== undefined) {
+        const trimmed = String(payload.rawSql).trim();
+        if (!trimmed) {
+          return { id: payload.id, rows: [], totalCount: 0, executionTimeMs: 0, columns: [], error: "SQL query cannot be empty" };
+        }
+        let results;
+        if (payload.readOnly) {
+          await db.exec("BEGIN");
+          try {
+            await db.exec("SET TRANSACTION READ ONLY");
+            results = await db.exec(trimmed);
+            await db.exec("COMMIT");
+          } catch (txErr) {
+            try { await db.exec("ROLLBACK"); } catch {}
+            throw txErr;
+          }
+        } else {
+          results = await db.exec(trimmed);
+          const writeInfo = detectWriteTable(trimmed);
+          if (writeInfo.isWrite) {
+            notifyDbMutated("viewer", writeInfo.table);
+          }
+        }
+        const last = results[results.length - 1];
+        const rows = serializeRows((last?.rows as Record<string, unknown>[]) ?? []);
+        const columns = last?.fields?.map((f) => f.name) ?? (rows[0] ? Object.keys(rows[0]) : []);
+        return {
+          id: payload.id,
+          rows,
+          totalCount: rows.length,
+          executionTimeMs: Math.round(performance.now() - start),
+          columns,
+          affectedRows: last?.affectedRows,
+        };
+      }
+
+      const tableName = String(payload.table || "");
+      const colRes = await db.query<{ column_name: string }>(
+        \`SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position ASC\`,
+        [tableName]
+      );
+      const validCols = colRes.rows.map((r) => r.column_name);
+      if (validCols.length === 0) throw new Error(\`Table "\${tableName}" not found\`);
+
+      const safeTable = quoteIdent(tableName);
+      const page = Math.max(1, Number(payload.page) || 1);
+      const pageSize = Math.min(Math.max(1, Number(payload.pageSize) || 25), 200);
+      const offset = (page - 1) * pageSize;
+      const params: unknown[] = [];
+      let whereClause = "";
+      const search = typeof payload.search === "string" ? payload.search.trim() : "";
+      if (search) {
+        params.push(\`%\${search}%\`);
+        whereClause = \`WHERE (\${validCols.map((c) => \`CAST(\${quoteIdent(c)} AS TEXT) ILIKE $1\`).join(" OR ")})\`;
+      }
+      let orderClause = "";
+      if (payload.sortColumn && validCols.includes(payload.sortColumn)) {
+        orderClause = \`ORDER BY \${quoteIdent(payload.sortColumn)} \${payload.sortDirection === "desc" ? "DESC" : "ASC"}\`;
+      }
+      const countRes = await db.query<{ total: number }>(\`SELECT COUNT(*)::int AS total FROM \${safeTable} \${whereClause}\`, params);
+      const totalCount = Number(countRes.rows[0]?.total ?? 0);
+      const dataRes = await db.query(
+        \`SELECT * FROM \${safeTable} \${whereClause} \${orderClause} LIMIT $\${params.length + 1} OFFSET $\${params.length + 2}\`,
+        [...params, pageSize, offset]
+      );
+      return {
+        id: payload.id,
+        rows: serializeRows(dataRes.rows as Record<string, unknown>[]),
+        totalCount,
+        executionTimeMs: Math.round(performance.now() - start),
+        columns: validCols,
+      };
+    })());
+  } catch (err: any) {
+    return {
+      id: payload.id,
+      rows: [],
+      totalCount: 0,
+      executionTimeMs: Math.round(performance.now() - start),
+      error: err?.message || "Query execution failed",
+    };
+  }
+}
+
+async function handleMutate(payload: any) {
+  if (payload.readOnly) {
+    return { id: payload.id, success: false, affectedRows: 0, error: "Database is in read-only mode during active generation" };
+  }
+  try {
+    const db = await getRawDb();
+    const tables = await introspectTables();
+    const tableMeta = tables.find((t) => t.name === payload.table);
+    if (!tableMeta) throw new Error(\`Table "\${payload.table}" not found\`);
+
+    const validCols = new Set(tableMeta.columns.map((c: any) => c.name));
+    const pkCols = tableMeta.columns.filter((c: any) => c.isPrimaryKey).map((c: any) => c.name);
+    const safeTable = quoteIdent(payload.table);
+
+    if (payload.action === "insert") {
+      const entries = Object.entries(payload.record || {}).filter(([k, v]) => validCols.has(k) && v !== undefined);
+      let res;
+      if (entries.length === 0) {
+        res = await db.query(\`INSERT INTO \${safeTable} DEFAULT VALUES RETURNING *\`);
+      } else {
+        const colsSql = entries.map(([k]) => quoteIdent(k)).join(", ");
+        const placeholders = entries.map((_, i) => \`$\${i + 1}\`).join(", ");
+        res = await db.query(\`INSERT INTO \${safeTable} (\${colsSql}) VALUES (\${placeholders}) RETURNING *\`, entries.map(([, v]) => v));
+      }
+      notifyDbMutated("viewer", payload.table);
+      return { id: payload.id, success: true, affectedRows: res.affectedRows ?? res.rows.length ?? 1 };
+    }
+
+    if (tableMeta.isReadOnly || pkCols.length === 0) {
+      throw new Error(\`Table "\${payload.table}" has no primary key and is read only\`);
+    }
+    const whereEntries = Object.entries(payload.where || {}).filter(([k]) => pkCols.includes(k));
+    if (whereEntries.length === 0 || whereEntries.length !== pkCols.length) {
+      throw new Error("Mutations require complete primary key values in WHERE clause");
+    }
+
+    if (payload.action === "update") {
+      const updateEntries = Object.entries(payload.record || {}).filter(([k, v]) => validCols.has(k) && v !== undefined);
+      if (updateEntries.length === 0) throw new Error("No columns provided for update");
+      const setSql = updateEntries.map(([k], i) => \`\${quoteIdent(k)} = $\${i + 1}\`).join(", ");
+      const whereSql = whereEntries.map(([k], i) => \`\${quoteIdent(k)} = $\${updateEntries.length + i + 1}\`).join(" AND ");
+      const res = await db.query(
+        \`UPDATE \${safeTable} SET \${setSql} WHERE \${whereSql}\`,
+        [...updateEntries.map(([, v]) => v), ...whereEntries.map(([, v]) => v)]
+      );
+      notifyDbMutated("viewer", payload.table);
+      return { id: payload.id, success: true, affectedRows: res.affectedRows ?? 1 };
+    }
+
+    if (payload.action === "delete") {
+      const whereSql = whereEntries.map(([k], i) => \`\${quoteIdent(k)} = $\${i + 1}\`).join(" AND ");
+      const res = await db.query(\`DELETE FROM \${safeTable} WHERE \${whereSql}\`, whereEntries.map(([, v]) => v));
+      notifyDbMutated("viewer", payload.table);
+      return { id: payload.id, success: true, affectedRows: res.affectedRows ?? 1 };
+    }
+
+    throw new Error(\`Unsupported action: \${payload.action}\`);
+  } catch (err: any) {
+    return { id: payload.id, success: false, affectedRows: 0, error: err?.message || "Mutation failed" };
+  }
+}
+
+async function handleExportSeed(payload: any) {
+  try {
+    const db = await getRawDb();
+    const tables = await introspectTables();
+    if (tables.length === 0) {
+      return { id: payload.id, sql: "-- No tables found in public schema\\n", tableCount: 0, rowCount: 0 };
+    }
+    const fkRes = await db.query<{ child_table: string; parent_table: string }>(
+      \`SELECT DISTINCT tc.table_name AS child_table, ccu.table_name AS parent_table FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = 'public' AND ccu.table_schema = 'public'\`
+    );
+    const deps = new Map<string, Set<string>>();
+    for (const t of tables) deps.set(t.name, new Set());
+    for (const fk of fkRes.rows) {
+      if (fk.child_table !== fk.parent_table && deps.has(fk.child_table) && deps.has(fk.parent_table)) {
+        deps.get(fk.child_table)?.add(fk.parent_table);
+      }
+    }
+    const ordered: string[] = [];
+    const visited = new Set<string>();
+    const visiting = new Set<string>();
+    const visit = (name: string) => {
+      if (visited.has(name) || visiting.has(name)) return;
+      visiting.add(name);
+      for (const p of Array.from(deps.get(name) ?? []).sort()) visit(p);
+      visiting.delete(name);
+      visited.add(name);
+      ordered.push(name);
+    };
+    for (const t of [...tables].map((x) => x.name).sort()) visit(t);
+
+    const tableMap = new Map(tables.map((t) => [t.name, t]));
+    const lines = ["-- Sparkweb generated database seed", \`-- Exported at \${new Date().toISOString()}\`, ""];
+    let rowCount = 0;
+
+    for (const tableName of ordered) {
+      const meta = tableMap.get(tableName);
+      if (!meta || meta.columns.length === 0) continue;
+      const pkCols = meta.columns.filter((c: any) => c.isPrimaryKey).map((c: any) => c.name);
+      const orderSql = pkCols.length > 0 ? \`ORDER BY \${pkCols.map((c: string) => quoteIdent(c)).join(", ")} ASC\` : "";
+      const dataRes = await db.query(\`SELECT * FROM \${quoteIdent(tableName)} \${orderSql}\`);
+      if (dataRes.rows.length > 0) {
+        lines.push(\`-- Table: \${tableName} (\${dataRes.rows.length} rows)\`);
+        const colsSql = meta.columns.map((c: any) => quoteIdent(c.name)).join(", ");
+        const suffix = pkCols.length > 0 ? " ON CONFLICT DO NOTHING" : "";
+        for (const row of dataRes.rows as Record<string, unknown>[]) {
+          const valsSql = meta.columns.map((c: any) => toSqlLiteral(row[c.name], c.type)).join(", ");
+          lines.push(\`INSERT INTO \${quoteIdent(tableName)} (\${colsSql}) VALUES (\${valsSql})\${suffix};\`);
+          rowCount++;
+        }
+        lines.push("");
+      }
+      for (const col of meta.columns) {
+        if (col.isIdentity) {
+          const escT = tableName.replace(/'/g, "''");
+          const escC = col.name.replace(/'/g, "''");
+          const qT = quoteIdent(tableName);
+          const qC = quoteIdent(col.name);
+          lines.push(\`SELECT setval(pg_get_serial_sequence('\${escT}', '\${escC}'), COALESCE((SELECT MAX(\${qC}) FROM \${qT}), 1), (SELECT COUNT(*) > 0 FROM \${qT}));\`);
+        }
+      }
+    }
+
+    const sql = \`\${lines.join("\\n").trimEnd()}\\n\`;
+    if (new TextEncoder().encode(sql).byteLength > 500 * 1024) {
+      throw new Error("Exported seed.sql exceeds the 500KB limit");
+    }
+    return { id: payload.id, sql, tableCount: ordered.length, rowCount };
+  } catch (err: any) {
+    return { id: payload.id, sql: "", tableCount: 0, rowCount: 0, error: err?.message || "Failed to export seed data" };
+  }
+}
+
+window.addEventListener("message", async (event: MessageEvent) => {
+  const data = event.data;
+  if (!data || typeof data !== "object" || data.protocol !== BRIDGE_PROTOCOL) return;
+
+  if (data.type === "DB_INTROSPECT_REQUEST") {
+    try {
+      const tables = await introspectTables();
+      postToParent("DB_INTROSPECT_RESPONSE", { id: data.payload?.id, tables });
+    } catch (err: any) {
+      postToParent("DB_INTROSPECT_RESPONSE", { id: data.payload?.id, tables: [], error: err?.message || "Introspection failed" });
+    }
+  } else if (data.type === "DB_QUERY_REQUEST") {
+    const res = await handleQuery(data.payload || {});
+    postToParent("DB_QUERY_RESPONSE", res);
+  } else if (data.type === "DB_MUTATE_REQUEST") {
+    const res = await handleMutate(data.payload || {});
+    postToParent("DB_MUTATE_RESPONSE", res);
+  } else if (data.type === "DB_EXPORT_SEED_REQUEST") {
+    const res = await handleExportSeed(data.payload || {});
+    postToParent("DB_EXPORT_SEED_RESPONSE", res);
+  }
+});
+
+// Emit DB_READY_EVENT once PGlite initializes
+getRawDb()
+  .then(async () => {
+    const tables = await introspectTables();
+    postToParent("DB_READY_EVENT", { tableCount: tables.length });
+  })
+  .catch(() => {
+    postToParent("DB_READY_EVENT", { tableCount: 0 });
+  });
 `,
   },
   "src/index.css": {
@@ -497,25 +932,189 @@ body {
   "src/lib/db.ts": {
     content: `import { PGlite } from "@electric-sql/pglite";
 
-let dbInstance: PGlite | null = null;
+let rawDbInstance: PGlite | null = null;
+let wrappedDbInstance: PGlite | null = null;
+let initPromise: Promise<PGlite> | null = null;
+let seedReplayed = false;
+let seedReplayPromise: Promise<boolean> | null = null;
+
+function detectAppWrite(sqlText: string): { isWrite: boolean; isCreateTable: boolean; table?: string } {
+  const cleaned = sqlText
+    .replace(/--[^\\n]*/g, " ")
+    .replace(/\\/\\*[\\s\\S]*?\\*\\//g, " ")
+    .replace(/'(?:''|[^'])*'/g, "''")
+    .trim();
+  if (!cleaned) return { isWrite: false, isCreateTable: false };
+  const isCreateTable = /\\bCREATE\\s+(?:TEMP\\s+|TEMPORARY\\s+)?TABLE\\b/i.test(cleaned);
+  const match = cleaned.match(
+    /\\b(INSERT\\s+INTO|UPDATE|DELETE\\s+FROM|TRUNCATE\\s+(?:TABLE\\s+)?|CREATE\\s+TABLE(?:\\s+IF\\s+NOT\\s+EXISTS)?|ALTER\\s+TABLE|DROP\\s+TABLE(?:\\s+IF\\s+EXISTS)?)\\s+(?:"?public"?\\.)?"?([a-zA-Z_][a-zA-Z0-9_$]*)"?/i
+  );
+  if (match) return { isWrite: true, isCreateTable, table: match[2] };
+  if (/\\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE)\\b/i.test(cleaned)) {
+    return { isWrite: true, isCreateTable };
+  }
+  return { isWrite: false, isCreateTable };
+}
+
+function emitAppMutation(table?: string) {
+  if (typeof window === "undefined") return;
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage(
+      {
+        protocol: "sparkweb:bridge:v1",
+        type: "DB_MUTATED_EVENT",
+        source: "sparkweb:sandbox",
+        payload: { origin: "app", ...(table ? { table } : {}) },
+        timestamp: Date.now(),
+      },
+      "*"
+    );
+  }
+  window.dispatchEvent(
+    new CustomEvent("spark:db-mutated", { detail: { origin: "app", table } })
+  );
+}
+
+function extractSeedTables(seedSql: string): string[] {
+  const tables = new Set<string>();
+  const regex = /\\bINSERT\\s+INTO\\s+(?:"?public"?\\.)?(?:"((?:[^"]|"")+)"|([a-zA-Z_][a-zA-Z0-9_$]*))/gi;
+  let match = regex.exec(seedSql);
+  while (match !== null) {
+    const tableName = match[1] ? match[1].replace(/""/g, '"') : match[2];
+    if (tableName) tables.add(tableName);
+    match = regex.exec(seedSql);
+  }
+  return Array.from(tables);
+}
+
+async function fetchSeedSql(): Promise<string | null> {
+  if (typeof fetch !== "function") return null;
+  try {
+    const res = await fetch("/seed.sql", { cache: "no-store" });
+    if (!res.ok) return null;
+    const contentType = (res.headers.get("content-type") || "").toLowerCase();
+    if (contentType.includes("text/html")) return null;
+    const text = await res.text();
+    const trimmed = text.trim();
+    if (!trimmed || trimmed.startsWith("<")) return null;
+    return trimmed;
+  } catch {
+    return null;
+  }
+}
+
+export async function replaySeedIfPresent(dbArg?: PGlite): Promise<boolean> {
+  if (seedReplayed) return false;
+  if (seedReplayPromise) return seedReplayPromise;
+
+  seedReplayPromise = (async () => {
+    try {
+      const target = dbArg ?? (await getRawDb());
+      const seedSql = await fetchSeedSql();
+      if (!seedSql) return false;
+
+      const requiredTables = extractSeedTables(seedSql);
+      if (requiredTables.length === 0) {
+        seedReplayed = true;
+        return false;
+      }
+
+      const existingRes = await target.query<{ table_name: string }>(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
+      );
+      const existingSet = new Set(existingRes.rows.map((r) => r.table_name));
+      if (!requiredTables.every((tbl) => existingSet.has(tbl))) {
+        return false;
+      }
+
+      await target.exec(seedSql);
+      seedReplayed = true;
+      emitAppMutation();
+      return true;
+    } catch (err) {
+      console.warn("Failed to replay seed.sql:", err);
+      return false;
+    } finally {
+      seedReplayPromise = null;
+    }
+  })();
+
+  return seedReplayPromise;
+}
+
+export async function getRawDb(): Promise<PGlite> {
+  if (rawDbInstance) return rawDbInstance;
+  if (!initPromise) {
+    initPromise = (async () => {
+      const instance = new PGlite();
+      await instance.waitReady;
+      rawDbInstance = instance;
+      return instance;
+    })();
+  }
+  return initPromise;
+}
 
 export async function getDb(): Promise<PGlite> {
-  if (!dbInstance) {
-    dbInstance = new PGlite();
-    await dbInstance.waitReady;
-  }
-  return dbInstance;
+  if (wrappedDbInstance) return wrappedDbInstance;
+  const raw = await getRawDb();
+
+  wrappedDbInstance = new Proxy(raw, {
+    get(target, prop, receiver) {
+      if (prop === "exec") {
+        return async (sql: string) => {
+          const result = await target.exec(sql);
+          const write = detectAppWrite(sql);
+          if (write.isCreateTable && !seedReplayed) {
+            await replaySeedIfPresent(target);
+          }
+          if (write.isWrite) {
+            emitAppMutation(write.table);
+          }
+          return result;
+        };
+      }
+      if (prop === "query") {
+        return async (sql: string, params?: any[]) => {
+          const result = await target.query(sql, params);
+          const write = detectAppWrite(sql);
+          if (write.isCreateTable && !seedReplayed) {
+            await replaySeedIfPresent(target);
+          }
+          if (write.isWrite) {
+            emitAppMutation(write.table);
+          }
+          return result;
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+  return wrappedDbInstance;
 }
 `,
   },
   "src/App.tsx": {
-    content: `import React, { useState, useEffect } from "react";
+    content: `import React, { useState, useEffect, useCallback } from "react";
 import { Sparkles, Database, Plus } from "lucide-react";
-import { getDb } from "./lib/db";
+import { getDb, replaySeedIfPresent } from "./lib/db";
 
 export default function App() {
   const [count, setCount] = useState(0);
   const [dbStatus, setDbStatus] = useState<string>("Initializing PGlite...");
+  const [itemCount, setItemCount] = useState<number>(0);
+
+  const refreshItems = useCallback(async () => {
+    try {
+      const db = await getDb();
+      const res = await db.query<{ total: number }>("SELECT COUNT(*)::int AS total FROM demo_items");
+      setItemCount(Number(res.rows[0]?.total ?? 0));
+    } catch {
+      // Ignore if table not yet created
+    }
+  }, []);
 
   useEffect(() => {
     async function initDb() {
@@ -528,13 +1127,33 @@ export default function App() {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           );
         \`);
+        await replaySeedIfPresent();
         setDbStatus("PGlite WASM database ready");
+        await refreshItems();
       } catch (err: any) {
         setDbStatus("Database: " + (err?.message || "Ready"));
       }
     }
     initDb();
-  }, []);
+
+    const onDbMutated = () => {
+      refreshItems();
+    };
+    window.addEventListener("spark:db-mutated", onDbMutated);
+    return () => window.removeEventListener("spark:db-mutated", onDbMutated);
+  }, [refreshItems]);
+
+  const handleAddSampleItem = async () => {
+    const next = count + 1;
+    setCount(next);
+    try {
+      const db = await getDb();
+      await db.query("INSERT INTO demo_items (name) VALUES ($1)", [\`Item #\${next}\`]);
+      await refreshItems();
+    } catch {
+      // Ignore
+    }
+  };
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-slate-950 p-6 text-slate-100">
@@ -551,16 +1170,16 @@ export default function App() {
 
         <div className="mb-6 space-y-4 rounded-xl border border-slate-800/80 bg-slate-950/50 p-4">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-slate-300">Interactive Counter</span>
+            <span className="text-sm font-medium text-slate-300">Demo Records</span>
             <span className="rounded-lg bg-indigo-500/10 px-2.5 py-1 font-mono text-sm font-semibold text-indigo-400">
-              {count}
+              {itemCount}
             </span>
           </div>
           <button
-            onClick={() => setCount((c) => c + 1)}
+            onClick={handleAddSampleItem}
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-500 active:scale-[0.98]"
           >
-            <Plus className="h-4 w-4" /> Increment Counter
+            <Plus className="h-4 w-4" /> Add Demo Record
           </button>
         </div>
 
@@ -618,6 +1237,33 @@ export function filterSourceFiles(files: SnapshotFilesMap): SnapshotFilesMap {
     }
   }
   return result;
+}
+
+/**
+ * Upgrade snapshots created with the legacy pre-fix starter `src/lib/db.ts`
+ * (which ran `seed.sql` via `import.meta.glob` inside `getRawDb()` before
+ * tables were created) to the fixed post-DDL seed replay template.
+ */
+export function upgradeLegacyDbTemplate(files: SnapshotFilesMap): SnapshotFilesMap {
+  const dbEntry = files["src/lib/db.ts"];
+  const latestDbEntry = STARTER_TEMPLATE_FILES["src/lib/db.ts"];
+  if (!dbEntry || !latestDbEntry) {
+    return files;
+  }
+
+  const content = dbEntry.content;
+  const isLegacyBrokenDbTemplate =
+    content.includes('import.meta.glob("/seed.sql"') &&
+    content.includes("await replaySeedIfPresent(instance);");
+
+  if (!isLegacyBrokenDbTemplate) {
+    return files;
+  }
+
+  return {
+    ...files,
+    "src/lib/db.ts": latestDbEntry,
+  };
 }
 
 export type WebContainerFileSystemTree = {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cn } from "./utils";
+import { cn, isValidUuid } from "./utils";
 
 describe("cn utility", () => {
   it("merges single class name strings", () => {
@@ -51,5 +51,21 @@ describe("cn utility", () => {
 
     // Assert
     expect(result).toBe("flex items-center opacity-50");
+  });
+});
+
+describe("isValidUuid utility", () => {
+  it("accepts deterministic demo UUIDs and standard v4 UUIDs", () => {
+    expect(isValidUuid("00000000-0000-0000-0000-000000000001")).toBe(true);
+    expect(isValidUuid("00000000-0000-0000-0000-000000000000")).toBe(true);
+    expect(isValidUuid("11111111-1111-4111-8111-111111111111")).toBe(true);
+    expect(isValidUuid("78789794-FCF3-4716-AD56-30E2C7ADD955")).toBe(true);
+  });
+
+  it("rejects malformed or non-UUID strings", () => {
+    expect(isValidUuid("invalid-uuid")).toBe(false);
+    expect(isValidUuid("")).toBe(false);
+    expect(isValidUuid("00000000-0000-0000-0000-00000000000")).toBe(false);
+    expect(isValidUuid("zzzzzzzz-0000-0000-0000-000000000001")).toBe(false);
   });
 });

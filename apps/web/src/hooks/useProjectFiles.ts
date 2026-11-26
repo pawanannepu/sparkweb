@@ -46,25 +46,40 @@ export function useProjectFiles({
   const debouncedWriteTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Synchronize incoming files from generation stream
-  const setFiles = useCallback((newFiles: SnapshotFilesMap) => {
-    setFilesState(newFiles);
-    setHistory((prev) => ({
-      past: prev.present
-        ? [
-            ...prev.past.slice(-30),
-            {
-              id: String(Date.now()),
-              timestamp: Date.now(),
-              files: prev.present,
-              description: "Generation sync",
-            },
-          ]
-        : prev.past,
-      present: Object.fromEntries(Object.entries(newFiles).map(([k, v]) => [k, v.content])),
-      future: [],
-    }));
-  }, []);
+  // Synchronize incoming files from generation stream or initial snapshot hydration
+  const setFiles = useCallback(
+    (newFiles: SnapshotFilesMap, options?: { resetHistory?: boolean }) => {
+      setFilesState(newFiles);
+      const nextPresent = Object.fromEntries(
+        Object.entries(newFiles).map(([k, v]) => [k, v.content])
+      );
+      if (options?.resetHistory) {
+        setHistory({
+          past: [],
+          present: nextPresent,
+          future: [],
+        });
+        setHasUnsavedCanvasChanges(false);
+        return;
+      }
+      setHistory((prev) => ({
+        past: prev.present
+          ? [
+              ...prev.past.slice(-30),
+              {
+                id: String(Date.now()),
+                timestamp: Date.now(),
+                files: prev.present,
+                description: "Generation sync",
+              },
+            ]
+          : prev.past,
+        present: nextPresent,
+        future: [],
+      }));
+    },
+    []
+  );
 
   const setIsInspectMode = useCallback(
     (enabled: boolean) => {

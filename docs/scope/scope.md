@@ -17,9 +17,9 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 | 4 | Design system and UI foundation | Foundation | in-progress |
 | 5 | Core generation loop and live preview | Slice 1 | in-progress |
 | 6 | Visual canvas inspector and direct styling | Slice 2 | in-progress |
-| 7 | Self healing verification engine | Slice 3 | in-progress |
+| 7 | Self healing verification engine | Slice 3 | done |
 | 8 | Version history snapshots and time travel rollback | Slice 4 | in-progress |
-| 9 | Managed database viewer and client data tools | Slice 5 | planned |
+| 9 | Managed database viewer and client data tools | Slice 5 | in-progress |
 | 10 | One click publishing and isolated live hosting | Slice 6 | planned |
 | 11 | Multi modal generation from images and design links | Slice 7 | planned |
 | 12 | Template library and starter project remixing | Slice 8 | planned |
@@ -156,10 +156,21 @@ spec [0007](../specs/0007-version-history-snapshots-and-time-travel-rollback/ind
 
 ## Slice 5: Managed database viewer and client data tools
 
-### 9. Managed database viewer and client data tools · needs a decision
+### 9. Managed database viewer and client data tools
 Provide an intuitive visual data browser inside the builder workspace where creators can view tables, inspect rows, insert or edit records, and request schema migrations in plain words.
 **Done when:** creators can view tables and records generated for their app, edit row values directly, and ask spark to add columns or tables safely.
-- [ ] Design it (spec): `/architect managed database viewer & client data tools`
+spec [0008](../specs/0008-managed-database-viewer-and-client-data-tools/index.md) · code in `apps/web`, `packages/db`, `packages/sandbox`, `packages/shared`
+- [x] Design it (spec): `/architect managed database viewer & client data tools`
+- [x] Build it: `/develop managed database viewer & client data tools`
+  - [x] Bridge message contracts, PGlite introspection, two hop runner forwarding, and ready handshake (AC-3, AC-9)
+  - [x] Right workbench database tab, persistent DOM mounting, table selector, and TanStack Table grid with server pagination (AC-4)
+  - [x] Visual CRUD inline editing, Add Record sheet, Delete Row modal, and bidirectional event invalidation (AC-5, AC-6)
+  - [x] Host database schema, Drizzle migration, and REST API routes for project query snippets (AC-1, AC-2)
+  - [x] Interactive CodeMirror SQL console, engine read only transactions, destructive warnings, and seed snapshot export (AC-7, AC-8, AC-9)
+- [x] Verify it: `/check verify managed database viewer & client data tools`
+- [x] Test it: `/test managed database viewer & client data tools`
+- [x] Review it (fresh model): `/check review managed database viewer & client data tools`
+- [x] Document it: `/document managed database viewer & client data tools`
 (basis: applications require visual database inspection and state management)
 
 ## Slice 6: One click publishing and isolated live hosting

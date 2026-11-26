@@ -63,7 +63,10 @@ Stored in `docs/specs/`. Format: `docs/specs/NNNN-title.md`.
 - [turborepo](.agents/skills/turborepo/): `vercel/turborepo`, monorepo task orchestration
 - [drizzle-orm-patterns](.agents/skills/drizzle-orm-patterns/): `giuseppe-trisciuoglio/developer-kit`, Drizzle ORM patterns
 - [playwright-test-generator](.agents/skills/playwright-test-generator/): `voidmatcha/e2e-skills`, browser test generation
+- [pglite](.agents/skills/pglite/): `oakoss/agent-skills`, PGlite WASM PostgreSQL queries, transactions, and React integration
+- [tanstack-table](.agents/skills/tanstack-table/): `tanstack-skills/tanstack-skills`, TanStack Table headless data grids, sorting, filtering, and pagination
 MCP servers: @modelcontextprotocol/server-postgres (recommended)
+Declined: CodeMirror 6 skills, optional MCP servers (pglite-mcp, tanstack-mcp)
 
 ## Context files
 

@@ -11,6 +11,7 @@ import {
 import { users } from "./auth";
 import { deployments } from "./deployments";
 import { projectBranches } from "./project-branches";
+import { projectQueries } from "./project-queries";
 import { promptThreads } from "./prompt-threads";
 import { snapshots } from "./snapshots";
 
@@ -61,6 +62,7 @@ export const projectsRelations = relations(projects, ({ one, many }) => ({
     relationName: "projectActiveBranch",
   }),
   branches: many(projectBranches, { relationName: "projectBranches" }),
+  queries: many(projectQueries),
   promptThreads: many(promptThreads),
   snapshots: many(snapshots, { relationName: "projectSnapshots" }),
   deployments: many(deployments),

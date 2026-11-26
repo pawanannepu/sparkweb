@@ -15,6 +15,13 @@
       "when": 1795525964097,
       "tag": "0001_ancient_doctor_strange",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795551030852,
+      "tag": "0002_quiet_franklin_richards",
+      "breakpoints": true
     }
   ]
 }

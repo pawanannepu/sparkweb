@@ -7,6 +7,7 @@ import {
   NotFoundError,
   projects,
   promptMessages,
+  promptThreads,
   type SnapshotTrigger,
   saveSnapshot,
 } from "@spark/db";
@@ -130,6 +131,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 
+  // 3b. Verify prompt message ownership if messageId is provided (AC-7)
+  let existingToolCalls: Record<string, unknown> | undefined;
+  if (messageId) {
+    const existingMsg = await db
+      .select({ toolCalls: promptMessages.toolCalls })
+      .from(promptMessages)
+      .innerJoin(promptThreads, eq(promptMessages.threadId, promptThreads.id))
+      .where(and(eq(promptMessages.id, messageId), eq(promptThreads.projectId, projectId)))
+      .limit(1);
+
+    if (existingMsg.length === 0) {
+      return NextResponse.json({ error: "Message not found" }, { status: 404 });
+    }
+    existingToolCalls = (existingMsg[0]?.toolCalls as Record<string, unknown>) || {};
+  }
+
   // 4. Filter source files to prevent node_modules or caches from persisting
   const cleanFiles = filterSourceFiles(files as SnapshotFilesMap);
 
@@ -154,15 +171,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     // 6. Update associated prompt message if messageId is provided (AC-7)
     if (messageId) {
-      const existingMsg = await db
-        .select({ toolCalls: promptMessages.toolCalls })
-        .from(promptMessages)
-        .where(eq(promptMessages.id, messageId))
-        .limit(1);
-
-      const prevToolCalls = (existingMsg[0]?.toolCalls as Record<string, unknown>) || {};
       const updatedToolCalls = {
-        ...prevToolCalls,
+        ...(existingToolCalls || {}),
         ...(healingTelemetry ? { healing: healingTelemetry } : {}),
         ...(status ? { verificationStatus: status } : {}),
       };

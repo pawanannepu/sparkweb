@@ -1,3 +1,5 @@
+export * from "./ai-models";
+
 export interface ProjectFile {
   path: string;
   content: string;
@@ -94,7 +96,17 @@ export type BridgeMessageType =
   | "PREVIEW_UPDATE_TEXT"
   | "PREVIEW_HMR_COMPLETE"
   | "PREVIEW_HEALTH_CHECK"
-  | "PREVIEW_HEALTH_STATUS";
+  | "PREVIEW_HEALTH_STATUS"
+  | "DB_READY_EVENT"
+  | "DB_INTROSPECT_REQUEST"
+  | "DB_INTROSPECT_RESPONSE"
+  | "DB_QUERY_REQUEST"
+  | "DB_QUERY_RESPONSE"
+  | "DB_MUTATE_REQUEST"
+  | "DB_MUTATE_RESPONSE"
+  | "DB_MUTATED_EVENT"
+  | "DB_EXPORT_SEED_REQUEST"
+  | "DB_EXPORT_SEED_RESPONSE";
 
 export type HealingCategory = "compiler" | "runtime" | "import" | "syntax";
 export type HealingAttemptStatus =
@@ -282,4 +294,105 @@ export interface SnapshotDiffResult {
 export interface PaginatedSnapshotsResponse {
   items: SnapshotSummary[];
   nextCursor: string | null;
+}
+
+export type DatabaseViewerMode = "BOOTING" | "EMPTY" | "READY" | "STREAMING_LOCKED";
+
+export interface DbColumnMetadata {
+  name: string;
+  type: string;
+  nullable: boolean;
+  isPrimaryKey: boolean;
+  isIdentity: boolean;
+  defaultValue: string | null;
+  enumValues?: string[];
+}
+
+export interface DbTableMetadata {
+  name: string;
+  isReadOnly: boolean;
+  rowCount: number;
+  columns: DbColumnMetadata[];
+}
+
+export interface DbReadyEventPayload {
+  tableCount: number;
+}
+
+export interface DbIntrospectRequestPayload {
+  id: string;
+}
+
+export interface DbIntrospectResponsePayload {
+  id: string;
+  tables: DbTableMetadata[];
+  error?: string;
+}
+
+export interface DbQueryRequestPayload {
+  id: string;
+  table?: string;
+  page?: number;
+  pageSize?: number;
+  sortColumn?: string;
+  sortDirection?: "asc" | "desc";
+  search?: string;
+  rawSql?: string;
+  readOnly?: boolean;
+}
+
+export interface DbQueryResponsePayload {
+  id: string;
+  rows: Record<string, unknown>[];
+  totalCount: number;
+  executionTimeMs: number;
+  columns?: string[];
+  affectedRows?: number;
+  error?: string;
+}
+
+export type DbMutateAction = "insert" | "update" | "delete";
+
+export interface DbMutateRequestPayload {
+  id: string;
+  action: DbMutateAction;
+  table: string;
+  record?: Record<string, unknown>;
+  where?: Record<string, unknown>;
+  readOnly?: boolean;
+}
+
+export interface DbMutateResponsePayload {
+  id: string;
+  success: boolean;
+  affectedRows: number;
+  error?: string;
+}
+
+export interface DbMutatedEventPayload {
+  origin: "app" | "viewer";
+  table?: string;
+}
+
+export interface DbExportSeedRequestPayload {
+  id: string;
+}
+
+export interface DbExportSeedResponsePayload {
+  id: string;
+  sql: string;
+  tableCount: number;
+  rowCount: number;
+  error?: string;
+}
+
+export interface ProjectQuerySummary {
+  id: string;
+  projectId: string;
+  title: string;
+  sql: string;
+  description: string | null;
+  isFavorite: boolean;
+  createdAt: string;
+  updatedAt: string;
 }

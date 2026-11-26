@@ -199,6 +199,30 @@ describe("POST /api/projects/[id]/generate", () => {
     vi.unstubAllEnvs();
   });
 
+  it("resolves OpenRouter models and returns openrouter in PROVIDER_KEY_MISSING", async () => {
+    vi.stubEnv("MOCK_AI", "");
+    vi.stubEnv("NODE_ENV", "development");
+
+    vi.mocked(getCurrentUser).mockResolvedValueOnce(mockUser);
+    vi.mocked(getDecryptedApiKey).mockRejectedValueOnce(new Error("No key found"));
+
+    const req = new NextRequest("http://localhost:3000/api/projects/proj-123/generate", {
+      method: "POST",
+      body: JSON.stringify({
+        prompt: "Create a counter",
+        model: "deepseek/deepseek-chat-v3-0324:free",
+      }),
+    });
+
+    const res = await POST(req, { params: Promise.resolve({ id: "proj-123" }) });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toBe("PROVIDER_KEY_MISSING");
+    expect(body.provider).toBe("openrouter");
+
+    vi.unstubAllEnvs();
+  });
+
   // covers: AC-1, AC-2, AC-9
   it("returns 200 OK with text/event-stream in mock or test mode", async () => {
     // Arrange
