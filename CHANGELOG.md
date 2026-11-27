@@ -59,6 +59,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Interactive CodeMirror 6 SQL Console with PostgreSQL syntax highlighting, schema autocompletion, execution timing in milliseconds, saved snippet pinning and management, and destructive statement confirmation dialogs for `DROP`, `TRUNCATE`, and unfiltered `DELETE` queries (see spec 0008)
 - Seed snapshot export (`POST /api/projects/[id]/database/seed`) serializing PGlite tables into foreign key ordered `INSERT` statements with sequence resets into `seed.sql` snapshots tagged `database_seed` (see spec 0008)
 - Database viewer lifecycle states (`BOOTING`, `EMPTY`, `READY`, `STREAMING_LOCKED`) with booting skeletons, guided empty state schema prompt chips, toolbar prompt bar routing to builder chat, and deferred `seed.sql` replay after DDL creation (see spec 0008)
+- Relational `project_domains` table, `projects.active_deployment_id` pointer, extended `deployments` lifecycle columns (`artifact_key`, `build_duration_ms`, `error_message`, `trigger`, `promoted_from_deployment_id`, `retired_at`), and Drizzle migration enforcing one active deployment per project (see spec 0009)
+- Isolated server side Vite build runner stripping builder scripts (`plugins/spark-inspector.js`, `src/spark-inspector-client.ts`, `src/spark-db-bridge.ts`) and configuring static `base: "/"` and `worker: { format: "es" }` bundles inside a temporary directory with a 120 second timeout and 50 MB output limit (see spec 0009)
+- Pluggable artifact storage (`LocalFsArtifactStore` and SigV4 signed `S3ArtifactStore`) and hosting routing (`LocalDevHostingAdapter` and `CloudflareSaasHostingAdapter`) plus the `@spark/edge-router` Cloudflare Worker serving static bundles and single page application fallbacks from Workers KV and R2 (see spec 0009)
+- Deployment and domain REST endpoints (`GET` and `POST /api/projects/[id]/deployments`, `GET /api/projects/[id]/deployments/[deploymentId]`, `POST /rollback`, `POST /unpublish`, `PATCH /api/projects/[id]/domain`, `POST /verify`, `DELETE /custom`, and `DELETE /api/projects/[id]`) supporting one click publish, zero rebuild rollback, unpublish, and DNS verification (see spec 0009)
+- Builder top bar `Publish` trigger opening `PublishPopover` with live URL copy, 1.5 second build polling, collapsible build logs, release rollback, unpublish controls, and `CustomDomainDialog` with CNAME and apex A record instructions (see spec 0009)
+- Next.js proxy middleware (`apps/web/src/proxy.ts`) and `/live/[subdomain]/[[...path]]` handler serving published bundles locally on `*.localhost:3000` with client side route fallback to `index.html` (see spec 0009)
 
 ### Changed
 - Builder workbench default preview target points to the active WebContainer sandbox runner route (see spec 0004)
@@ -70,6 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New projects automatically provision a default main branch upon creation (see spec 0007)
 - Right workbench pane keeps `PreviewFrame` continuously mounted in the DOM using CSS `hidden` when viewing the `Database` tab so in browser PGlite state persists across tab switches (see spec 0008)
 - Sandbox runner and starter template serialize concurrent container boots, upgrade legacy database templates, and bundle the in app `spark-db-bridge.ts` helper for PGlite introspection and write notifications (see spec 0008)
+- Top navigation header in `BuilderShell` sets `relative z-40` so inline publishing popovers render cleanly above workspace panes (see spec 0009)
+- `deployments.subdomain` and `deployments.custom_domain` drop unique constraints and `deployments.snapshot_id` becomes nullable with `on delete set null` so historical deployment records outlive domain renames and snapshot deletions (see spec 0009)
 
 ### Security
 - Encrypted storage for personal provider credentials at rest with authentication tag tamper verification (see spec 0002)
@@ -86,3 +94,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parameterized SQL query bindings (`$1`, `$2`) and identifier quoting for visual table browsing and CRUD mutations, with keyless tables marked read only (see spec 0008)
 - Streaming lock mode disabling visual edit controls and `seed.sql` snapshot commits (HTTP 409 Conflict) while AI generation or repair is active (see spec 0008)
 - Project owner isolation and session checks on saved query snippet and seed snapshot API routes, plus a 500KB payload limit on `seed.sql` snapshots (see spec 0008)
+- Origin isolation serving published applications on separate `*.localhost:3000` or custom domain origins with 307 redirects away from direct builder origin `/live/` hits, zero auth cookies, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, and `X-Frame-Options: SAMEORIGIN` headers (see spec 0009)
+- Build sandbox hardening disabling npm lifecycle scripts (`--ignore-scripts`), stripping host environment variables, rejecting path traversal when writing snapshot files or reading artifacts, and cleaning temporary build workspaces in `finally` blocks (see spec 0009)
+- Custom domain hijacking prevention requiring DNS TXT ownership verification at `_sparkweb-verify.<domain>` before syncing hostnames, rejecting localhost, IP literals, and reserved platform suffixes, and enforcing a 5 requests per minute rate limit (`HTTP 429`) on verification checks (see spec 0009)
+- Snapshot deletion guard rejecting deletes (`HTTP 409`) for snapshots backing `queued`, `building`, or `active` deployments, and project deletion cleanup removing stored artifact prefixes and provider hostnames before cascading database rows (see spec 0009)

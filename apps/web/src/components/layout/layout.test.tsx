@@ -85,6 +85,7 @@ describe("Layout Components", () => {
     expect(screen.getByText("sparkweb")).toBeInTheDocument();
     expect(screen.getByText("Analytics Studio")).toBeInTheDocument();
     expect(screen.getByLabelText("Toggle theme")).toBeInTheDocument();
+    expect(screen.getByRole("banner")).toHaveClass("relative", "z-40");
   });
 
   it("renders BuilderWorkbench and toggles mobile view on switcher click (AC-5)", async () => {

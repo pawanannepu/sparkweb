@@ -34,6 +34,7 @@ import {
   PreviewFrame,
   PreviewToolbar,
 } from "@/components/layout";
+import { CustomDomainDialog, PublishPopover } from "@/components/publishing";
 import { ApiKeysDialog } from "@/components/settings";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,6 +43,7 @@ import { useDatabaseViewer } from "@/hooks/useDatabaseViewer";
 import { useGenerationLoop } from "@/hooks/useGenerationLoop";
 import { usePreviewBridge } from "@/hooks/usePreviewBridge";
 import { useProjectFiles } from "@/hooks/useProjectFiles";
+import { usePublishing } from "@/hooks/usePublishing";
 import { useVersionHistory } from "@/hooks/useVersionHistory";
 import { cn } from "@/lib/utils";
 
@@ -107,8 +109,10 @@ export default function BuilderPage() {
   const [branchSourceMessage, setBranchSourceMessage] = useState<string | null>(null);
   const [isApiKeysOpen, setIsApiKeysOpen] = useState(false);
   const [highlightedKeyProvider, setHighlightedKeyProvider] = useState<AiProvider | null>(null);
+  const [isDomainDialogOpen, setIsDomainDialogOpen] = useState(false);
 
   const aiSettings = useAiSettings();
+  const publishing = usePublishing({ projectId });
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const dbBridgeHandlerRef = useRef<((msg: BridgeMessage) => void) | null>(null);
@@ -413,28 +417,56 @@ export default function BuilderPage() {
     <BuilderShell
       projectName="Demo Application"
       headerActions={
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            setHighlightedKeyProvider(null);
-            setIsApiKeysOpen(true);
-          }}
-          aria-label="Configure AI API keys"
-          className="h-8 gap-1.5 text-xs"
-        >
-          <KeyRound className="h-3.5 w-3.5 text-indigo-500" />
-          <span>API Keys</span>
-          {aiSettings.hasKeyForProvider("openrouter") && (
-            <Badge
-              variant="secondary"
-              className="ml-0.5 bg-emerald-500/15 px-1.5 py-0 text-[10px] text-emerald-700 dark:text-emerald-300"
-            >
-              OpenRouter
-            </Badge>
-          )}
-        </Button>
+        <div className="flex items-center gap-2">
+          <PublishPopover
+            domain={publishing.domain}
+            activeDeployment={publishing.activeDeployment}
+            deployments={publishing.deployments}
+            inProgressDeployment={publishing.inProgressDeployment}
+            isPublishing={publishing.isPublishing}
+            isStreaming={isGenerationStreaming}
+            previewClean={!previewError}
+            error={publishing.error}
+            onPublish={() => {
+              void publishing.publishNow({
+                previewClean: !previewError,
+                isStreaming: isGenerationStreaming,
+              });
+            }}
+            onRollback={(depId) => {
+              void publishing.rollbackDeployment(depId);
+            }}
+            onUnpublish={() => {
+              void publishing.unpublish();
+            }}
+            onOpenDomainDialog={() => {
+              publishing.clearDomainError();
+              setIsDomainDialogOpen(true);
+            }}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setHighlightedKeyProvider(null);
+              setIsApiKeysOpen(true);
+            }}
+            aria-label="Configure AI API keys"
+            className="h-8 gap-1.5 text-xs"
+          >
+            <KeyRound className="h-3.5 w-3.5 text-indigo-500" />
+            <span>API Keys</span>
+            {aiSettings.hasKeyForProvider("openrouter") && (
+              <Badge
+                variant="secondary"
+                className="ml-0.5 bg-emerald-500/15 px-1.5 py-0 text-[10px] text-emerald-700 dark:text-emerald-300"
+              >
+                OpenRouter
+              </Badge>
+            )}
+          </Button>
+        </div>
       }
       branchSwitcher={
         <BranchSwitcher
@@ -838,6 +870,26 @@ export default function BuilderPage() {
         highlightedProvider={highlightedKeyProvider}
         onSaveKey={aiSettings.saveApiKey}
         onRemoveKey={aiSettings.removeApiKey}
+      />
+
+      {/* Custom Domain & Subdomain Settings Dialog */}
+      <CustomDomainDialog
+        open={isDomainDialogOpen}
+        onOpenChange={(open) => {
+          setIsDomainDialogOpen(open);
+          if (!open) {
+            publishing.clearDomainError();
+          }
+        }}
+        domain={publishing.domain}
+        dnsInstructions={publishing.dnsInstructions}
+        isUpdating={publishing.isUpdatingDomain}
+        isVerifying={publishing.isVerifyingDomain}
+        error={publishing.domainError}
+        onUpdateSubdomain={publishing.updateSubdomain}
+        onSaveCustomDomain={publishing.saveCustomDomain}
+        onVerifyDomain={publishing.verifyCustomDomain}
+        onRemoveCustomDomain={publishing.removeCustomDomain}
       />
     </BuilderShell>
   );

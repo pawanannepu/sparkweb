@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, desc, eq, gt, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, type SQL, sql } from "drizzle-orm";
 import type { PgDatabase } from "drizzle-orm/pg-core";
 import { computeSnapshotTreeHash, decryptApiKey, encryptApiKey, extractKeyHint } from "./crypto";
 import {
@@ -12,7 +12,6 @@ import {
 import type * as schema from "./schema/index";
 import {
   apiKeys,
-  type Deployment,
   deployments,
   type Project,
   type ProjectBranch,
@@ -1147,79 +1146,7 @@ export async function deleteUserApiKey(
   return deleted.length > 0;
 }
 
-export interface CreateDeploymentParams {
-  projectId: string;
-  userId: string;
-  snapshotId: string;
-  subdomain: string;
-  customDomain?: string;
-}
-
-export async function createDeployment(
-  db: DatabaseClient,
-  params: CreateDeploymentParams
-): Promise<Deployment> {
-  const projectRows = await db
-    .select({ id: projects.id, userId: projects.userId })
-    .from(projects)
-    .where(eq(projects.id, params.projectId))
-    .limit(1);
-
-  const project = projectRows[0];
-  if (!project) {
-    throw new NotFoundError(`Project ${params.projectId} not found`);
-  }
-
-  if (project.userId !== params.userId) {
-    throw new ForbiddenError("You do not have access to this project");
-  }
-
-  const snapshotRows = await db
-    .select({ id: snapshots.id, projectId: snapshots.projectId })
-    .from(snapshots)
-    .where(and(eq(snapshots.id, params.snapshotId), eq(snapshots.projectId, params.projectId)))
-    .limit(1);
-
-  if (snapshotRows.length === 0) {
-    throw new NotFoundError(
-      `Snapshot ${params.snapshotId} does not belong to project ${params.projectId}`
-    );
-  }
-
-  const normalizedSubdomain = slugify(params.subdomain);
-  const existingSubdomain = await db
-    .select({ id: deployments.id })
-    .from(deployments)
-    .where(eq(deployments.subdomain, normalizedSubdomain))
-    .limit(1);
-
-  if (existingSubdomain.length > 0) {
-    throw new ConflictError(`Subdomain '${normalizedSubdomain}' is already taken`);
-  }
-
-  const platformDomain = process.env.PLATFORM_DOMAIN || "sparkapps.dev";
-  const protocol = platformDomain.includes("localhost") ? "http" : "https";
-  const deploymentUrl = `${protocol}://${normalizedSubdomain}.${platformDomain}`;
-
-  const result = await db
-    .insert(deployments)
-    .values({
-      projectId: params.projectId,
-      snapshotId: params.snapshotId,
-      subdomain: normalizedSubdomain,
-      customDomain: params.customDomain?.trim(),
-      status: "queued",
-      deploymentUrl,
-    })
-    .returning();
-
-  const created = result[0];
-  if (!created) {
-    throw new Error("Failed to create deployment");
-  }
-
-  return created;
-}
+export * from "./publishing-queries";
 
 export async function deleteSnapshot(
   db: DatabaseClient,
@@ -1245,14 +1172,19 @@ export async function deleteSnapshot(
     throw new ForbiddenError("You do not have access to this snapshot");
   }
 
-  // Domain logic protection: prevent deleting snapshots backing active deployments (AC-4)
-  const activeDeployments = await db
+  // Domain logic protection: prevent deleting snapshots backing queued, building, or active deployments (AC-9)
+  const blockingDeployments = await db
     .select({ id: deployments.id })
     .from(deployments)
-    .where(and(eq(deployments.snapshotId, params.id), eq(deployments.status, "active")))
+    .where(
+      and(
+        eq(deployments.snapshotId, params.id),
+        inArray(deployments.status, ["queued", "building", "active"])
+      )
+    )
     .limit(1);
 
-  if (activeDeployments.length > 0) {
+  if (blockingDeployments.length > 0) {
     throw new SnapshotInActiveDeploymentError(params.id);
   }
 

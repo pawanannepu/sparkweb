@@ -32,8 +32,8 @@ export function BuilderShell({
 
   return (
     <div className={cn("flex min-h-screen flex-col bg-background text-foreground", className)}>
-      {/* Studio Top Navigation Bar */}
-      <header className="flex h-14 items-center justify-between border-b border-border bg-card/80 px-4 backdrop-blur">
+      {/* Studio Top Navigation Bar (z-40 keeps inline header popovers above main workspace stacking contexts) */}
+      <header className="relative z-40 flex h-14 items-center justify-between border-b border-border bg-card/80 px-4 backdrop-blur">
         {/* Brand & Project Identity */}
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 font-bold tracking-tight">

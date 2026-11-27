@@ -1,6 +1,13 @@
 {
   "version": 2,
   "skills": {
+    "cloudflare": {
+      "source": "cloudflare/skills",
+      "commit": "ff191de7d903788eceaf516a514ae7d3b56b924a",
+      "sourceType": "github",
+      "skillPath": "skills/cloudflare/SKILL.md",
+      "computedHash": "c87fdf5939f1c0b86dc895af18dbff1be369707fc3f1cd9cc038c3c3be5c694f"
+    },
     "drizzle-orm-patterns": {
       "source": "giuseppe-trisciuoglio/developer-kit",
       "commit": "fe73fb33a09ee6562eeec7415a3f9a3bcf795177",

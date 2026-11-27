@@ -11,6 +11,7 @@ import {
 import { users } from "./auth";
 import { deployments } from "./deployments";
 import { projectBranches } from "./project-branches";
+import { projectDomains } from "./project-domains";
 import { projectQueries } from "./project-queries";
 import { promptThreads } from "./prompt-threads";
 import { snapshots } from "./snapshots";
@@ -33,6 +34,9 @@ export const projects = pgTable(
       onDelete: "set null",
     }),
     activeBranchId: uuid("active_branch_id").references((): AnyPgColumn => projectBranches.id, {
+      onDelete: "set null",
+    }),
+    activeDeploymentId: uuid("active_deployment_id").references((): AnyPgColumn => deployments.id, {
       onDelete: "set null",
     }),
     createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
@@ -61,9 +65,19 @@ export const projectsRelations = relations(projects, ({ one, many }) => ({
     references: [projectBranches.id],
     relationName: "projectActiveBranch",
   }),
+  activeDeployment: one(deployments, {
+    fields: [projects.activeDeploymentId],
+    references: [deployments.id],
+    relationName: "projectActiveDeployment",
+  }),
+  domain: one(projectDomains, {
+    fields: [projects.id],
+    references: [projectDomains.projectId],
+    relationName: "projectDomain",
+  }),
   branches: many(projectBranches, { relationName: "projectBranches" }),
   queries: many(projectQueries),
   promptThreads: many(promptThreads),
   snapshots: many(snapshots, { relationName: "projectSnapshots" }),
-  deployments: many(deployments),
+  deployments: many(deployments, { relationName: "projectDeployments" }),
 }));

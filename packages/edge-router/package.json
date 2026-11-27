@@ -1,0 +1,18 @@
+{
+  "name": "@spark/edge-router",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "biome check .",
+    "check-types": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@spark/typescript-config": "workspace:*",
+    "typescript": "^5.7.2"
+  }
+}

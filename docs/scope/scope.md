@@ -20,7 +20,7 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 | 7 | Self healing verification engine | Slice 3 | done |
 | 8 | Version history snapshots and time travel rollback | Slice 4 | in-progress |
 | 9 | Managed database viewer and client data tools | Slice 5 | in-progress |
-| 10 | One click publishing and isolated live hosting | Slice 6 | planned |
+| 10 | One click publishing and isolated live hosting | Slice 6 | in-progress |
 | 11 | Multi modal generation from images and design links | Slice 7 | planned |
 | 12 | Template library and starter project remixing | Slice 8 | planned |
 | 13 | GitHub sync and full code export | Slice 9 | planned |
@@ -175,10 +175,21 @@ spec [0008](../specs/0008-managed-database-viewer-and-client-data-tools/index.md
 
 ## Slice 6: One click publishing and isolated live hosting
 
-### 10. One click publishing and isolated live hosting · needs a decision
+### 10. One click publishing and isolated live hosting
 Publish generated applications to persistent live web addresses with custom domains, automatic SSL certificates, and strict isolation between preview drafts and public live releases.
 **Done when:** clicking publish deploys the current snapshot to a public secure URL, custom domain routing succeeds, and subsequent workspace edits remain in preview until published again.
-- [ ] Design it (spec): `/architect one click publishing & isolated live hosting`
+spec [0009](../specs/0009-one-click-publishing-and-isolated-live-hosting/index.md) · code in `packages/db`, `packages/shared`, `packages/edge-router`, `apps/web`
+- [x] Design it (spec): `/architect one click publishing & isolated live hosting`
+- [x] Build it: `/develop one click publishing & isolated live hosting`
+  - [x] Database schema, Drizzle migration, and transactional domain and deployment queries (AC-1, AC-9)
+  - [x] Isolated Vite build runner, builder script stripping, and artifact storage (AC-3, AC-4)
+  - [x] Hosting adapter, Cloudflare Worker edge router, and local host serving handler (AC-5, AC-8)
+  - [x] Publishing, rollback, unpublish, and custom domain DNS verification API routes (AC-2, AC-6, AC-7, AC-9)
+  - [x] Builder top bar Publish popover, build log viewer, and custom domain dialog (AC-10)
+- [x] Verify it: `/check verify one click publishing & isolated live hosting`
+- [x] Test it: `/test one click publishing & isolated live hosting`
+- [x] Review it (fresh model): `/check review one click publishing & isolated live hosting`
+- [x] Document it: `/document one click publishing & isolated live hosting`
 (basis: separate preview and live environments prevent accidental staging leaks)
 
 ## Slice 7: Multi modal generation from images and design links

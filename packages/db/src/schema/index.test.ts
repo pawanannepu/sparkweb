@@ -5,6 +5,7 @@ import {
   apiKeys,
   deployments,
   projectBranches,
+  projectDomains,
   projects,
   promptMessages,
   promptThreads,
@@ -62,7 +63,7 @@ describe("db schema definitions", () => {
     expect(columns.createdAt).toBeDefined();
   });
 
-  it("defines projects table with slug and snapshot pointers", () => {
+  it("defines projects table with slug, activeDeploymentId, and snapshot pointers", () => {
     const columns = getTableColumns(projects);
     expect(columns.id).toBeDefined();
     expect(columns.userId).toBeDefined();
@@ -73,6 +74,7 @@ describe("db schema definitions", () => {
     expect(columns.forkedFromProjectId).toBeDefined();
     expect(columns.currentSnapshotId).toBeDefined();
     expect(columns.activeBranchId).toBeDefined();
+    expect(columns.activeDeploymentId).toBeDefined();
     expect(columns.createdAt).toBeDefined();
     expect(columns.updatedAt).toBeDefined();
   });
@@ -121,7 +123,7 @@ describe("db schema definitions", () => {
     expect(columns.updatedAt).toBeDefined();
   });
 
-  it("defines deployments table with subdomain and deploymentUrl", () => {
+  it("defines deployments table with artifactKey, trigger, and lifecycle columns", () => {
     const columns = getTableColumns(deployments);
     expect(columns.id).toBeDefined();
     expect(columns.projectId).toBeDefined();
@@ -130,5 +132,27 @@ describe("db schema definitions", () => {
     expect(columns.customDomain).toBeDefined();
     expect(columns.status).toBeDefined();
     expect(columns.deploymentUrl).toBeDefined();
+    expect(columns.artifactKey).toBeDefined();
+    expect(columns.buildDurationMs).toBeDefined();
+    expect(columns.errorMessage).toBeDefined();
+    expect(columns.trigger).toBeDefined();
+    expect(columns.promotedFromDeploymentId).toBeDefined();
+    expect(columns.retiredAt).toBeDefined();
+  });
+
+  it("defines project_domains table with verification and SSL columns", () => {
+    const columns = getTableColumns(projectDomains);
+    expect(columns.id).toBeDefined();
+    expect(columns.projectId).toBeDefined();
+    expect(columns.subdomain).toBeDefined();
+    expect(columns.customDomain).toBeDefined();
+    expect(columns.recordType).toBeDefined();
+    expect(columns.verificationToken).toBeDefined();
+    expect(columns.verificationStatus).toBeDefined();
+    expect(columns.sslStatus).toBeDefined();
+    expect(columns.providerHostnameId).toBeDefined();
+    expect(columns.failureReason).toBeDefined();
+    expect(columns.lastCheckedAt).toBeDefined();
+    expect(columns.verifiedAt).toBeDefined();
   });
 });

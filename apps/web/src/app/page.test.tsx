@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import BuilderPage from "./page";
@@ -8,6 +9,7 @@ describe("BuilderPage Component", () => {
     cleanup();
     window.sessionStorage.clear();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
 
@@ -260,5 +262,171 @@ describe("BuilderPage Component", () => {
     const repairButton = screen.getByRole("button", { name: /Repair in sparkweb/i });
     expect(repairButton).toHaveTextContent("Repair in sparkweb (3 tries left)");
     expect(repairButton).toBeEnabled();
+  });
+
+  // covers: AC-10
+  it("renders Publish trigger in builder header, opens PublishPopover, triggers publish, and opens CustomDomainDialog", async () => {
+    const user = userEvent.setup();
+    const now = "2026-11-26T00:00:00.000Z";
+    const domain = {
+      id: "dom-1",
+      projectId: "proj-1",
+      subdomain: "demo-app",
+      customDomain: null,
+      recordType: null,
+      verificationToken: null,
+      verificationStatus: "unconfigured",
+      sslStatus: "unconfigured",
+      failureReason: null,
+      lastCheckedAt: null,
+      verifiedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes("/deployments?limit=10")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              domain,
+              activeDeployment: null,
+              items: [],
+              nextCursor: null,
+            }),
+            { status: 200 }
+          )
+        );
+      }
+      if (url.endsWith("/deployments") && init?.method === "POST") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              deployment: {
+                id: "dep-1",
+                projectId: "proj-1",
+                snapshotId: "snap-1",
+                subdomain: "demo-app",
+                customDomain: null,
+                status: "queued",
+                deploymentUrl: "http://demo-app.localhost:3000",
+                artifactKey: "deployments/proj-1/dep-1",
+                buildLogs: null,
+                buildDurationMs: null,
+                errorMessage: null,
+                trigger: "manual",
+                promotedFromDeploymentId: null,
+                retiredAt: null,
+                createdAt: now,
+                updatedAt: now,
+              },
+              domain,
+            }),
+            { status: 202 }
+          )
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            items: [],
+            branches: [],
+            queries: [],
+            keys: [],
+            envProviders: [],
+            configuredProviders: [],
+            providerModels: { openrouter: [], anthropic: [], openai: [], gemini: [] },
+          }),
+          { status: 200 }
+        )
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<BuilderPage />);
+
+    const publishTrigger = screen.getByRole("button", { name: /^Publish$/i });
+    await user.click(publishTrigger);
+
+    expect(screen.getByRole("region", { name: "Publishing controls" })).toBeInTheDocument();
+    expect(screen.getByText("Live Hosting")).toBeInTheDocument();
+    expect(screen.getByText("Unpublished")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Publish Site/i }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          String(url).endsWith("/deployments") &&
+          (init as RequestInit | undefined)?.method === "POST"
+      );
+      expect(postCall).toBeDefined();
+      const requestInit = postCall?.[1] as RequestInit | undefined;
+      expect(JSON.parse(String(requestInit?.body))).toEqual({
+        previewClean: true,
+        isStreaming: false,
+      });
+    });
+
+    await user.click(screen.getByRole("button", { name: /Domains/i }));
+
+    expect(
+      await screen.findByRole("dialog", { name: /Domain & SSL Settings/i })
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Platform Subdomain")).toHaveValue("demo-app");
+  });
+
+  // covers: AC-2, AC-10
+  it("disables Publish Site inside PublishPopover when preview has an active error", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              domain: null,
+              activeDeployment: null,
+              items: [],
+              branches: [],
+              queries: [],
+              keys: [],
+              envProviders: [],
+              configuredProviders: [],
+              providerModels: { openrouter: [], anthropic: [], openai: [], gemini: [] },
+            }),
+            { status: 200 }
+          )
+        )
+      )
+    );
+
+    render(<BuilderPage />);
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          origin: "http://localhost:3000",
+          data: {
+            protocol: "sparkweb:bridge:v1",
+            type: "PREVIEW_ERROR",
+            source: "sparkweb:sandbox",
+            payload: {
+              category: "runtime",
+              message: "Uncaught Error: broken preview",
+              filename: "src/App.tsx",
+            },
+            timestamp: Date.now(),
+          },
+        })
+      );
+    });
+
+    await user.click(screen.getByRole("button", { name: /^Publish$/i }));
+
+    expect(
+      screen.getByText("Resolve preview errors before publishing to live.")
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Publish Site/i })).toBeDisabled();
   });
 });
