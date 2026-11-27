@@ -16,6 +16,16 @@ const SELECTED_MODEL_STORAGE_KEY = "sparkweb:selected-model";
 const DEFAULT_MODEL_ID = "claude-3-7-sonnet";
 const STALE_DEFAULT_OPENROUTER_IDS = new Set(OPENROUTER_DEFAULT_MODELS.map((m) => m.id));
 
+function isAllowedUnlistedOpenRouterModel(modelId: string, freeOnly?: boolean): boolean {
+  if (STALE_DEFAULT_OPENROUTER_IDS.has(modelId)) {
+    return false;
+  }
+  if (!freeOnly) {
+    return true;
+  }
+  return modelId === "openrouter/free" || modelId.endsWith(":free");
+}
+
 type ProviderModelsMap = Record<AiProvider, AiModelOption[]>;
 
 const EMPTY_PROVIDER_MODELS: ProviderModelsMap = {
@@ -273,12 +283,12 @@ export function useAiSettings(): UseAiSettingsReturn {
     const existsInLive = liveForProvider.some((m) => m.id === selectedModel);
     if (existsInLive) return;
 
-    if (currentProvider === "openrouter" && isOpenRouterModelId(selectedModel)) {
-      const isStaleDefault = STALE_DEFAULT_OPENROUTER_IDS.has(selectedModel);
-      const violatesFreeOnly = Boolean(openRouterKeyBudget?.freeOnly);
-      if (!isStaleDefault && !violatesFreeOnly) {
-        return;
-      }
+    if (
+      currentProvider === "openrouter" &&
+      isOpenRouterModelId(selectedModel) &&
+      isAllowedUnlistedOpenRouterModel(selectedModel, openRouterKeyBudget?.freeOnly)
+    ) {
+      return;
     }
 
     const bestForProvider = pickPreferredModelForProvider(currentProvider, liveForProvider);
@@ -334,8 +344,11 @@ export function useAiSettings(): UseAiSettingsReturn {
         currentProviderHasKey &&
         (currentLiveList.some((m) => m.id === selectedModel) ||
           (currentProvider === "openrouter" &&
-            !STALE_DEFAULT_OPENROUTER_IDS.has(selectedModel) &&
-            !refreshed?.openRouterKeyBudget?.freeOnly));
+            isOpenRouterModelId(selectedModel) &&
+            isAllowedUnlistedOpenRouterModel(
+              selectedModel,
+              refreshed?.openRouterKeyBudget?.freeOnly
+            )));
 
       if (!currentStillValid || currentProvider === provider) {
         const nextModel = pickBestConfiguredModel(nextModelsMap, nextProviders, provider);

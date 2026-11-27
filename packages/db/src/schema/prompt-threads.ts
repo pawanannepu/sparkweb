@@ -18,6 +18,7 @@ export const promptThreads = pgTable("prompt_threads", {
     .notNull()
     .references(() => projects.id, { onDelete: "cascade" }),
   title: text("title").default("Main thread").notNull(),
+  outlineLockExpiresAt: timestamp("outline_lock_expires_at", { mode: "date" }),
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { mode: "date" }).defaultNow().notNull(),
 });

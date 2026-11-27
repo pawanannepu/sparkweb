@@ -106,4 +106,39 @@ describe("artifact-store", () => {
       "https://r2.example.com/spark-bundles/deployments/p1/d1/assets/app.js",
     ]);
   });
+
+  // covers: AC-4, AC-10
+  it("supports deleteObject on LocalFsArtifactStore and S3ArtifactStore", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
+    const tempDir = await mkdtemp(path.join(tmpdir(), "spark-artifact-del-"));
+
+    try {
+      const localStore = new LocalFsArtifactStore(tempDir);
+      await localStore.putObject("attachments/p1/a1", new Uint8Array([1, 2, 3]), "image/png");
+      expect(await localStore.getObject("attachments/p1/a1")).not.toBeNull();
+      await localStore.deleteObject("attachments/p1/a1");
+      expect(await localStore.getObject("attachments/p1/a1")).toBeNull();
+      await expect(localStore.deleteObject("../escape")).rejects.toThrow("Invalid artifact key");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 404 }))
+      .mockResolvedValueOnce(new Response(null, { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const s3 = new S3ArtifactStore({
+      endpoint: "https://r2.example.com",
+      bucket: "spark-bundles",
+      accessKeyId: "AKIA_TEST",
+      secretAccessKey: "SECRET_TEST",
+    });
+
+    await expect(s3.deleteObject("attachments/p1/missing")).resolves.toBeUndefined();
+    await expect(s3.deleteObject("attachments/p1/err")).rejects.toThrow("S3 deleteObject failed");
+  });
 });

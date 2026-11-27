@@ -21,7 +21,7 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 | 8 | Version history snapshots and time travel rollback | Slice 4 | in-progress |
 | 9 | Managed database viewer and client data tools | Slice 5 | in-progress |
 | 10 | One click publishing and isolated live hosting | Slice 6 | in-progress |
-| 11 | Multi modal generation from images and design links | Slice 7 | planned |
+| 11 | Multi modal generation from images and design links | Slice 7 | in-progress |
 | 12 | Template library and starter project remixing | Slice 8 | planned |
 | 13 | GitHub sync and full code export | Slice 9 | planned |
 
@@ -194,10 +194,21 @@ spec [0009](../specs/0009-one-click-publishing-and-isolated-live-hosting/index.m
 
 ## Slice 7: Multi modal generation from images and design links
 
-### 11. Multi modal generation from images and design links · needs a decision
+### 11. Multi modal generation from images and design links
 Accept screenshots, paper sketches, design exports, or external website URLs to seed layout structure, visual color palettes, and component hierarchy for prompt generation.
 **Done when:** uploading an image or entering an existing website address extracts layout structure and visual style tokens, creating a planned application outline ready to build.
-- [ ] Design it (spec): `/architect multi modal generation`
+spec [0010](../specs/0010-multi-modal-generation/index.md) · code in `apps/web`, `packages/db`, `packages/shared`
+- [x] Design it (spec): `/architect multi modal generation`
+- [x] Build it: `/develop multi modal generation`
+  - [x] Shared vision capability flags, attachment DTOs, and outline Zod contracts (AC-2, AC-3)
+  - [x] Database schema, Drizzle migration, extraction lease, and cleanup queries (AC-1, AC-10)
+  - [x] Image attachment upload, sharp normalization, ArtifactStore, and thread hydration API (AC-4, AC-10)
+  - [x] SSRF guarded cheerio URL extractor, outline routes, and generate pipeline integration (AC-5, AC-6, AC-7, AC-9)
+  - [x] Multi modal PromptComposer, editable DesignOutlineCard, and two step generation loop wiring (AC-2, AC-3, AC-4, AC-7, AC-8, AC-9)
+- [x] Verify it: `/check verify multi modal generation`
+- [x] Test it: `/test multi modal generation`
+- [x] Review it (fresh model): `/check review multi modal generation`
+- [x] Document it: `/document multi modal generation`
 (basis: multi modal inputs accelerate creator onboarding from existing designs)
 
 ## Slice 8: Template library and starter project remixing

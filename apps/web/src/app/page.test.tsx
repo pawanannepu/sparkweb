@@ -429,4 +429,196 @@ describe("BuilderPage Component", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Publish Site/i })).toBeDisabled();
   });
+
+  // covers: AC-2, AC-4, AC-7, AC-8, AC-9
+  it("hydrates thread state with pending attachments and outlines, preserves attachments on outline error, and builds without duplicating user message", async () => {
+    const user = userEvent.setup();
+    const now = "2026-11-28T00:00:00.000Z";
+    const pendingAtt = {
+      id: "att-hydrated-1",
+      projectId: "proj-1",
+      threadId: "thread-hydrated",
+      messageId: null,
+      kind: "image",
+      sourceUrl: null,
+      fileName: "hydrated.png",
+      mimeType: "image/png",
+      sizeBytes: 1500,
+      width: 640,
+      height: 480,
+      previewUrl: "/api/projects/proj-1/attachments/att-hydrated-1",
+      urlSnapshot: null,
+      createdAt: now,
+    };
+    const hydratedOutline = {
+      id: "00000000-0000-0000-0000-000000000055",
+      projectId: "proj-1",
+      threadId: "thread-hydrated",
+      sourceMessageId: "msg-user-1",
+      clonedFromOutlineId: null,
+      outlineMessageId: "msg-outline-1",
+      buildMessageId: null,
+      status: "ready",
+      modelId: "claude-3-7-sonnet",
+      extractedOutline: {
+        appSummary: "Hydrated CRM Workspace",
+        palette: [{ id: "p1", role: "Primary", hex: "#2563EB", usage: "Primary CTA" }],
+        typography: { headingFont: "Inter", bodyFont: "Inter", scaleNotes: "Clean" },
+        layoutSections: [{ id: "s1", name: "Pipeline", description: "Kanban view", enabled: true }],
+        componentHierarchy: [{ id: "c1", name: "AppShell", role: "Shell", enabled: true }],
+        additionalNotes: "",
+      },
+      editedOutline: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const encoder = new TextEncoder();
+    const generateStream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'event: plan\ndata: {"messageId":"msg-build-1","steps":[{"id":"step-3","title":"Verify","status":"pending"}]}\n\n'
+          )
+        );
+        controller.enqueue(
+          encoder.encode(
+            'event: file_op\ndata: {"path":"src/App.tsx","op":"write","content":"export default function App() { return <div>CRM</div>; }"}\n\n'
+          )
+        );
+        controller.enqueue(encoder.encode('event: finish\ndata: {"messageId":"msg-build-1"}\n\n'));
+        controller.close();
+      },
+    });
+
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes("/threads/default/state")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              threadId: "thread-hydrated",
+              messages: [
+                {
+                  id: "msg-user-1",
+                  threadId: "thread-hydrated",
+                  seq: 1,
+                  role: "user",
+                  content: "Build CRM from screenshot",
+                  toolCalls: null,
+                  snapshotId: null,
+                  status: "completed",
+                  createdAt: now,
+                },
+                {
+                  id: "msg-outline-1",
+                  threadId: "thread-hydrated",
+                  seq: 2,
+                  role: "assistant",
+                  content: "Hydrated CRM Workspace",
+                  toolCalls: null,
+                  snapshotId: null,
+                  status: "completed",
+                  createdAt: now,
+                },
+              ],
+              attachmentsByMessageId: {},
+              pendingAttachments: [pendingAtt],
+              outlines: [hydratedOutline],
+            }),
+            { status: 200 }
+          )
+        );
+      }
+      if (url.endsWith("/outlines") && init?.method === "POST") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: "Website returned an empty JavaScript shell.",
+              code: "URL_JS_SHELL",
+              suggestion: "Paste a screenshot instead.",
+            }),
+            { status: 422 }
+          )
+        );
+      }
+      if (url.endsWith("/generate") && init?.method === "POST") {
+        return Promise.resolve({ ok: true, body: generateStream } as unknown as Response);
+      }
+      if (url.endsWith("/snapshots") && init?.method === "POST") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: "snap-mm-1", treeHash: "hash-mm-1" }), { status: 200 })
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            items: [],
+            branches: [],
+            queries: [],
+            keys: [],
+            envProviders: [],
+            configuredProviders: ["anthropic"],
+            providerModels: {
+              openrouter: [],
+              anthropic: [
+                {
+                  id: "claude-3-7-sonnet",
+                  name: "Claude 3.7 Sonnet",
+                  provider: "anthropic",
+                  tier: "paid",
+                  supportsVision: true,
+                },
+              ],
+              openai: [],
+              gemini: [],
+            },
+          }),
+          { status: 200 }
+        )
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<BuilderPage />);
+
+    // Hydrated pending image chip and DesignOutlineCard appear (desktop + mobile panes both mount)
+    const hydratedChips = await screen.findAllByText("hydrated.png");
+    expect(hydratedChips.length).toBeGreaterThan(0);
+    const summaryInput = screen.getAllByLabelText("Application Summary")[0];
+    if (!summaryInput) throw new Error("Summary input not found");
+    expect(summaryInput).toHaveValue("Hydrated CRM Workspace");
+
+    // Triggering URL extraction error keeps pending image chip intact
+    const urlToggle = screen.getAllByRole("button", { name: "Add website design URL" })[0];
+    if (!urlToggle) throw new Error("URL toggle button not found");
+    await user.click(urlToggle);
+    const urlInput = screen.getAllByLabelText("Reference website URL")[0];
+    if (!urlInput) throw new Error("URL input not found");
+    await user.type(urlInput, "https://spa.example.com");
+    const extractBtn = screen.getAllByRole("button", { name: /extract outline/i })[0];
+    if (!extractBtn) throw new Error("Extract outline button not found");
+    await user.click(extractBtn);
+
+    const errMessages = await screen.findAllByText("Website returned an empty JavaScript shell.");
+    expect(errMessages.length).toBeGreaterThan(0);
+    expect(screen.getAllByText("hydrated.png").length).toBeGreaterThan(0);
+
+    // Clicking Build App sends outlineId to /generate and does not duplicate user prompt message
+    const buildBtn = screen.getAllByRole("button", { name: /build app/i })[0];
+    if (!buildBtn) throw new Error("Build App button not found");
+    await user.click(buildBtn);
+
+    await waitFor(() => {
+      const generateCall = fetchMock.mock.calls.find(
+        ([u, i]) =>
+          String(u).endsWith("/generate") && (i as RequestInit | undefined)?.method === "POST"
+      );
+      expect(generateCall).toBeDefined();
+      const body = JSON.parse(String((generateCall?.[1] as RequestInit | undefined)?.body));
+      expect(body.outlineId).toBe(hydratedOutline.id);
+    });
+
+    expect(screen.getAllByText("Build CRM from screenshot").length).toBeLessThanOrEqual(2);
+    expect(screen.getAllByText("Locked for build").length).toBeGreaterThan(0);
+  });
 });

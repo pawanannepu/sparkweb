@@ -2,31 +2,40 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Hoisted mocks
-const { mockSelect, mockInsert, mockUpdate, mockDb, mockSaveSnapshot, mockGetDecryptedApiKey } =
-  vi.hoisted(() => {
-    const mockSelect = vi.fn();
-    const mockInsert = vi.fn();
-    const mockUpdate = vi.fn();
-    const mockDb = {
-      select: mockSelect,
-      insert: mockInsert,
-      update: mockUpdate,
-    };
-    const mockSaveSnapshot = vi.fn().mockResolvedValue({
-      id: "mock-snapshot-uuid",
-      treeHash: "mock-tree-hash-sha256",
-    });
-    const mockGetDecryptedApiKey = vi.fn();
-
-    return {
-      mockSelect,
-      mockInsert,
-      mockUpdate,
-      mockDb,
-      mockSaveSnapshot,
-      mockGetDecryptedApiKey,
-    };
+const {
+  mockSelect,
+  mockInsert,
+  mockUpdate,
+  mockDb,
+  mockSaveSnapshot,
+  mockGetDecryptedApiKey,
+  mockStartOutlineBuildTransaction,
+} = vi.hoisted(() => {
+  const mockSelect = vi.fn();
+  const mockInsert = vi.fn();
+  const mockUpdate = vi.fn();
+  const mockDb = {
+    select: mockSelect,
+    insert: mockInsert,
+    update: mockUpdate,
+  };
+  const mockSaveSnapshot = vi.fn().mockResolvedValue({
+    id: "mock-snapshot-uuid",
+    treeHash: "mock-tree-hash-sha256",
   });
+  const mockGetDecryptedApiKey = vi.fn();
+  const mockStartOutlineBuildTransaction = vi.fn();
+
+  return {
+    mockSelect,
+    mockInsert,
+    mockUpdate,
+    mockDb,
+    mockSaveSnapshot,
+    mockGetDecryptedApiKey,
+    mockStartOutlineBuildTransaction,
+  };
+});
 
 // Mock auth module
 vi.mock("@/lib/auth", () => ({
@@ -40,10 +49,11 @@ vi.mock("@spark/db", async (importOriginal) => {
     db: mockDb,
     getDecryptedApiKey: mockGetDecryptedApiKey,
     saveSnapshot: mockSaveSnapshot,
+    startOutlineBuildTransaction: mockStartOutlineBuildTransaction,
   };
 });
 
-import { getDecryptedApiKey } from "@spark/db";
+import { ConflictError, getDecryptedApiKey } from "@spark/db";
 import { getCurrentUser } from "@/lib/auth";
 import { POST } from "./route";
 
@@ -257,5 +267,95 @@ describe("POST /api/projects/[id]/generate", () => {
     expect(streamData).toContain("event: file_op");
     expect(streamData).toContain("event: finish");
     expect(streamData).toContain("msg-123");
+  });
+
+  // covers: AC-9
+  it("validates outlineId and editedOutline, maps outline conflict to 409, and streams confirmed outline build without duplicate user prompt", async () => {
+    process.env.MOCK_AI = "true";
+    vi.mocked(getCurrentUser).mockResolvedValue(mockUser);
+
+    const badOutlineRes = await POST(
+      new NextRequest("http://localhost:3000/api/projects/proj-123/generate", {
+        method: "POST",
+        body: JSON.stringify({ outlineId: "not-a-uuid" }),
+      }),
+      { params: Promise.resolve({ id: "proj-123" }) }
+    );
+    expect(badOutlineRes.status).toBe(400);
+
+    const validOutlineId = "00000000-0000-0000-0000-000000000020";
+    const badEditedRes = await POST(
+      new NextRequest("http://localhost:3000/api/projects/proj-123/generate", {
+        method: "POST",
+        body: JSON.stringify({ outlineId: validOutlineId, editedOutline: { appSummary: "" } }),
+      }),
+      { params: Promise.resolve({ id: "proj-123" }) }
+    );
+    expect(badEditedRes.status).toBe(400);
+
+    mockStartOutlineBuildTransaction.mockRejectedValueOnce(new ConflictError("Already confirmed"));
+    const conflictRes = await POST(
+      new NextRequest("http://localhost:3000/api/projects/proj-123/generate", {
+        method: "POST",
+        body: JSON.stringify({ outlineId: validOutlineId }),
+      }),
+      { params: Promise.resolve({ id: "proj-123" }) }
+    );
+    expect(conflictRes.status).toBe(409);
+
+    mockStartOutlineBuildTransaction.mockResolvedValueOnce({
+      outline: {
+        id: validOutlineId,
+        extractedOutline: {
+          appSummary: "Original App",
+          palette: [{ id: "p1", role: "Primary", hex: "#2563EB", usage: "CTA" }],
+          typography: { headingFont: "Inter", bodyFont: "Inter", scaleNotes: "Clean" },
+          layoutSections: [
+            { id: "s1", name: "EnabledSection", description: "Visible", enabled: true },
+            { id: "s2", name: "DisabledSection", description: "Hidden", enabled: false },
+          ],
+          componentHierarchy: [{ id: "c1", name: "AppShell", role: "Root", enabled: true }],
+          additionalNotes: "",
+        },
+        editedOutline: {
+          appSummary: "Confirmed Custom App",
+          palette: [{ id: "p1", role: "Primary", hex: "#10B981", usage: "CTA" }],
+          typography: { headingFont: "Plus Jakarta Sans", bodyFont: "Inter", scaleNotes: "Clean" },
+          layoutSections: [
+            { id: "s1", name: "EnabledSection", description: "Visible", enabled: true },
+            { id: "s2", name: "DisabledSection", description: "Hidden", enabled: false },
+          ],
+          componentHierarchy: [{ id: "c1", name: "AppShell", role: "Root", enabled: true }],
+          additionalNotes: "",
+        },
+      },
+      assistantMessage: { id: "build-msg-1" },
+      threadId: "thread-123",
+      sourceUserContent: "Build from reference",
+    });
+
+    const okRes = await POST(
+      new NextRequest("http://localhost:3000/api/projects/proj-123/generate", {
+        method: "POST",
+        body: JSON.stringify({ outlineId: validOutlineId }),
+      }),
+      { params: Promise.resolve({ id: "proj-123" }) }
+    );
+
+    expect(okRes.status).toBe(200);
+    const reader = okRes.body?.getReader();
+    let streamData = "";
+    const decoder = new TextDecoder();
+    while (reader) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      streamData += decoder.decode(value);
+    }
+
+    expect(streamData).toContain("build-msg-1");
+    expect(streamData).toContain("Confirmed Custom App");
+    expect(streamData).toContain("EnabledSection");
+    expect(streamData).not.toContain("DisabledSection");
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 });

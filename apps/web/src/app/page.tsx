@@ -5,18 +5,25 @@ import type {
   AiProvider,
   BridgeMessage,
   BridgeMessageType,
+  DesignAttachmentDto,
+  DesignOutlineDto,
+  DesignOutlinePayload,
   DeviceMode,
   PreviewErrorPayload,
   ProjectFile,
   SelectedElementState,
   SnapshotFilesMap,
   SnapshotSummary,
+  ThreadMessageDto,
+  ThreadStateResponse,
 } from "@spark/shared";
-import { Database, KeyRound, Lock, Monitor, Sparkles } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Database, Globe, KeyRound, Lock, Monitor, Sparkles } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DatabaseViewer } from "@/components/database";
 import {
+  DesignOutlineCard,
   GenerationProgressCard,
+  type MultimodalSubmitPayload,
   PreviewErrorBanner,
   PromptComposer,
 } from "@/components/generation";
@@ -93,8 +100,14 @@ export default function BuilderPage() {
   const [currentPath, setCurrentPath] = useState("/");
   const [previewError, setPreviewError] = useState<PreviewErrorPayload | null>(null);
   const [isManualRepairSession, setIsManualRepairSession] = useState(false);
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const [pendingAttachments, setPendingAttachments] = useState<DesignAttachmentDto[]>([]);
+  const [attachmentsByMessageId, setAttachmentsByMessageId] = useState<
+    Record<string, DesignAttachmentDto[]>
+  >({});
+  const [outlines, setOutlines] = useState<DesignOutlineDto[]>([]);
   const [messages, setMessages] = useState<
-    Array<{ id: string; role: "user" | "assistant"; content: string }>
+    Array<{ id: string; role: "user" | "assistant" | "system"; content: string }>
   >([
     {
       id: "initial",
@@ -190,7 +203,7 @@ export default function BuilderPage() {
   const sendToPreviewRef = useRef(sendToPreview);
   sendToPreviewRef.current = sendToPreview;
 
-  // Hydrate latest project snapshot on mount so full page reloads restore seed.sql and app files
+  // Hydrate latest project snapshot and thread state on mount
   useEffect(() => {
     let cancelled = false;
     async function hydrateCurrentSnapshot() {
@@ -214,7 +227,33 @@ export default function BuilderPage() {
         }
       }
     }
+
+    async function hydrateThreadState() {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/threads/default/state`);
+        if (!res.ok) return;
+        const data = (await res.json()) as ThreadStateResponse;
+        if (cancelled) return;
+        setThreadId(data.threadId);
+        setPendingAttachments(data.pendingAttachments ?? []);
+        setAttachmentsByMessageId(data.attachmentsByMessageId ?? {});
+        setOutlines(data.outlines ?? []);
+        if (Array.isArray(data.messages) && data.messages.length > 0) {
+          setMessages(
+            data.messages.map((m) => ({
+              id: m.id,
+              role: m.role,
+              content: m.content || (m.role === "assistant" ? "Build output generated." : ""),
+            }))
+          );
+        }
+      } catch {
+        // Ignore hydration failures when offline or unmocked
+      }
+    }
+
     hydrateCurrentSnapshot().catch(() => {});
+    hydrateThreadState().catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -284,14 +323,20 @@ export default function BuilderPage() {
 
   const {
     isStreaming,
+    isExtractingOutline,
+    extractionError,
+    clearExtractionError,
     planSteps,
     fileOperations,
     healingTelemetry,
     submitPrompt,
+    extractOutline,
+    submitBuildFromOutline,
     triggerRepair,
     cancelGeneration,
   } = useGenerationLoop({
     projectId,
+    threadId: threadId ?? undefined,
     getCurrentFiles: () =>
       Object.fromEntries(Object.entries(files).map(([k, v]) => [k, v.content])),
     requestHealthCheck: checkPreviewHealth,
@@ -390,6 +435,107 @@ export default function BuilderPage() {
     setMessages((prev) => [...prev, { id: String(Date.now()), role: "user", content: promptText }]);
     await submitPrompt(promptText, model);
   };
+
+  const handleMultimodalSubmit = async (payload: MultimodalSubmitPayload): Promise<boolean> => {
+    setIsManualRepairSession(false);
+    const result = await extractOutline({
+      prompt: payload.prompt,
+      model: payload.model,
+      threadId: threadId ?? undefined,
+      attachmentIds: payload.attachmentIds,
+      sourceUrl: payload.sourceUrl,
+      visionOverride: payload.visionOverride,
+    });
+
+    if (!result) {
+      return false;
+    }
+
+    setThreadId(result.outline.threadId);
+    setPendingAttachments((prev) => prev.filter((att) => !payload.attachmentIds.includes(att.id)));
+    setAttachmentsByMessageId((prev) => ({
+      ...prev,
+      [result.userMessage.id]: result.attachments,
+    }));
+    setOutlines((prev) => [
+      ...prev.map((o) =>
+        o.threadId === result.outline.threadId && o.status === "ready"
+          ? { ...o, status: "superseded" as const }
+          : o
+      ),
+      result.outline,
+    ]);
+    setMessages((prev) => [
+      ...prev.filter((m) => m.id !== "initial"),
+      {
+        id: result.userMessage.id,
+        role: result.userMessage.role,
+        content: result.userMessage.content,
+      },
+      {
+        id: result.outlineMessage.id,
+        role: result.outlineMessage.role,
+        content: result.outlineMessage.content,
+      },
+    ]);
+    return true;
+  };
+
+  const handleOutlineUpdated = (updated: DesignOutlineDto) => {
+    setOutlines((prev) => prev.map((o) => (o.id === updated.id ? updated : o)));
+  };
+
+  const handleOutlineCloned = (cloned: DesignOutlineDto, outlineMessage: ThreadMessageDto) => {
+    setOutlines((prev) => [
+      ...prev.map((o) =>
+        o.threadId === cloned.threadId && o.status === "ready"
+          ? { ...o, status: "superseded" as const }
+          : o
+      ),
+      cloned,
+    ]);
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: outlineMessage.id,
+        role: outlineMessage.role,
+        content: outlineMessage.content,
+      },
+    ]);
+  };
+
+  const handleBuildOutline = async (outlineId: string, latestPayload: DesignOutlinePayload) => {
+    setIsManualRepairSession(false);
+    const previousOutlines = outlines;
+    setOutlines((prev) =>
+      prev.map((o) =>
+        o.id === outlineId
+          ? { ...o, status: "confirmed" as const, editedOutline: latestPayload }
+          : o
+      )
+    );
+
+    const started = await submitBuildFromOutline({
+      outlineId,
+      editedOutline: latestPayload,
+      model: aiSettings.selectedModel,
+      promptSummary: latestPayload.appSummary,
+    });
+
+    if (!started) {
+      setOutlines(previousOutlines);
+    }
+  };
+
+  const outlineByMessageId = useMemo(() => {
+    const map = new Map<string, DesignOutlineDto>();
+    for (const outline of outlines) {
+      if (outline.outlineMessageId) {
+        map.set(outline.outlineMessageId, outline);
+      }
+    }
+    return map;
+  }, [outlines]);
 
   const [iframeKey, setIframeKey] = useState(0);
 
@@ -509,28 +655,79 @@ export default function BuilderPage() {
             <div className="flex h-full flex-col justify-between space-y-4">
               {/* Message List */}
               <div className="space-y-4 overflow-y-auto pr-1">
-                {messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex flex-col space-y-1.5 ${
-                      msg.role === "user" ? "items-end" : "items-start"
-                    }`}
-                  >
-                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      {msg.role === "assistant" && <Sparkles className="h-3 w-3 text-indigo-400" />}
-                      <span>{msg.role === "user" ? "You" : "spark"}</span>
-                    </div>
+                {messages.map((msg) => {
+                  const msgAttachments = attachmentsByMessageId[msg.id] ?? [];
+                  const linkedOutline = outlineByMessageId.get(msg.id);
+
+                  return (
                     <div
-                      className={`rounded-xl px-3.5 py-2.5 text-sm leading-relaxed max-w-[92%] ${
-                        msg.role === "user"
-                          ? "bg-indigo-600 text-white font-medium shadow-sm"
-                          : "bg-card border border-border/80 text-foreground shadow-sm"
+                      key={msg.id}
+                      className={`flex flex-col space-y-2 ${
+                        msg.role === "user" ? "items-end" : "items-start"
                       }`}
                     >
-                      {msg.content}
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        {msg.role === "assistant" && (
+                          <Sparkles className="h-3 w-3 text-indigo-400" />
+                        )}
+                        <span>{msg.role === "user" ? "You" : "spark"}</span>
+                      </div>
+
+                      {msgAttachments.length > 0 && (
+                        <div className="flex max-w-[92%] flex-wrap justify-end gap-2">
+                          {msgAttachments.map((att) =>
+                            att.kind === "image" && att.previewUrl ? (
+                              <div
+                                key={att.id}
+                                className="overflow-hidden rounded-lg border border-border bg-card shadow-sm"
+                              >
+                                {/* biome-ignore lint/performance/noImgElement: authenticated private attachment route */}
+                                <img
+                                  src={att.previewUrl}
+                                  alt={att.fileName || "Design reference image"}
+                                  className="h-20 w-24 object-cover"
+                                />
+                              </div>
+                            ) : att.kind === "url" && att.sourceUrl ? (
+                              <div
+                                key={att.id}
+                                className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-foreground shadow-sm"
+                              >
+                                <Globe className="h-3.5 w-3.5 shrink-0 text-primary" />
+                                <span className="max-w-[200px] truncate font-medium">
+                                  {att.urlSnapshot?.title || att.sourceUrl}
+                                </span>
+                              </div>
+                            ) : null
+                          )}
+                        </div>
+                      )}
+
+                      <div
+                        className={`rounded-xl px-3.5 py-2.5 text-sm leading-relaxed max-w-[92%] ${
+                          msg.role === "user"
+                            ? "bg-indigo-600 text-white font-medium shadow-sm"
+                            : "bg-card border border-border/80 text-foreground shadow-sm"
+                        }`}
+                      >
+                        {msg.content}
+                      </div>
+
+                      {linkedOutline && (
+                        <div className="w-full max-w-[98%]">
+                          <DesignOutlineCard
+                            projectId={projectId}
+                            outline={linkedOutline}
+                            isBusy={isStreaming || isExtractingOutline}
+                            onOutlineUpdated={handleOutlineUpdated}
+                            onOutlineCloned={handleOutlineCloned}
+                            onBuildOutline={handleBuildOutline}
+                          />
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
 
                 {/* Live Progress Card when streaming or active steps present */}
                 {(isStreaming || planSteps.length > 0 || healingTelemetry.status !== "none") && (
@@ -585,9 +782,13 @@ export default function BuilderPage() {
                     )}
 
                     <PromptComposer
+                      projectId={projectId}
+                      threadId={threadId}
                       onSubmit={handlePromptSubmit}
+                      onSubmitMultimodal={handleMultimodalSubmit}
                       onCancel={cancelGeneration}
                       isStreaming={isStreaming}
+                      isExtractingOutline={isExtractingOutline}
                       selectedModel={aiSettings.selectedModel}
                       onModelChange={aiSettings.setSelectedModel}
                       openRouterModels={aiSettings.openRouterModels}
@@ -595,6 +796,16 @@ export default function BuilderPage() {
                       configuredProviders={aiSettings.configuredProviders}
                       openRouterKeyBudget={aiSettings.openRouterKeyBudget}
                       hasOpenRouterKey={aiSettings.hasKeyForProvider("openrouter")}
+                      pendingAttachments={pendingAttachments}
+                      onAttachmentUploaded={(att) => {
+                        setThreadId(att.threadId);
+                        setPendingAttachments((prev) => [...prev, att]);
+                      }}
+                      onAttachmentRemoved={(attId) => {
+                        setPendingAttachments((prev) => prev.filter((a) => a.id !== attId));
+                      }}
+                      extractionError={extractionError}
+                      onDismissExtractionError={clearExtractionError}
                       onOpenApiKeys={() => {
                         setHighlightedKeyProvider("openrouter");
                         setIsApiKeysOpen(true);

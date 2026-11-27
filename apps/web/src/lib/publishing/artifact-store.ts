@@ -120,6 +120,11 @@ export class LocalFsArtifactStore implements ArtifactStore {
     }
   }
 
+  async deleteObject(key: string): Promise<void> {
+    const targetPath = this.resolveSafePath(key);
+    await rm(targetPath, { force: true });
+  }
+
   async deletePrefix(prefix: string): Promise<void> {
     const targetDir = this.resolveSafePath(prefix.replace(/\/+$/, ""));
     await rm(targetDir, { recursive: true, force: true });
@@ -292,6 +297,18 @@ export class S3ArtifactStore implements ArtifactStore {
       contentType: res.headers.get("content-type") || inferContentType(normalizedKey),
       size: body.byteLength,
     };
+  }
+
+  async deleteObject(key: string): Promise<void> {
+    const normalizedKey = normalizeArtifactKey(key);
+    const delSigned = this.signRequest("DELETE", `/${this.bucket}/${normalizedKey}`, {}, "");
+    const delRes = await fetch(delSigned.url, {
+      method: "DELETE",
+      headers: delSigned.headers,
+    });
+    if (!delRes.ok && delRes.status !== 404) {
+      throw new Error(`S3 deleteObject failed (${delRes.status}) for ${normalizedKey}`);
+    }
   }
 
   async deletePrefix(prefix: string): Promise<void> {

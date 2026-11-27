@@ -1,4 +1,5 @@
 export * from "./ai-models";
+export * from "./multimodal";
 export * from "./publishing";
 
 export interface ProjectFile {

@@ -9,6 +9,7 @@ import {
   type DomainSslStatus,
   type DomainVerificationStatus,
   deployments,
+  designAttachments,
   type Project,
   type ProjectDomain,
   projectDomains,
@@ -960,6 +961,7 @@ export async function getProjectDeletionResources(
   project: Project;
   domain: ProjectDomain | null;
   artifactKeys: string[];
+  attachmentStorageKeys: string[];
 }> {
   const project = await getOwnedProject(db, params.projectId, params.userId);
 
@@ -974,14 +976,24 @@ export async function getProjectDeletionResources(
     .from(deployments)
     .where(eq(deployments.projectId, params.projectId));
 
+  const attachmentRows = await db
+    .select({ storageKey: designAttachments.storageKey })
+    .from(designAttachments)
+    .where(eq(designAttachments.projectId, params.projectId));
+
   const artifactKeys = Array.from(
     new Set(deploymentRows.map((d) => d.artifactKey).filter((key): key is string => Boolean(key)))
+  );
+
+  const attachmentStorageKeys = Array.from(
+    new Set(attachmentRows.map((a) => a.storageKey).filter((key): key is string => Boolean(key)))
   );
 
   return {
     project,
     domain: domainRows[0] ?? null,
     artifactKeys,
+    attachmentStorageKeys,
   };
 }
 

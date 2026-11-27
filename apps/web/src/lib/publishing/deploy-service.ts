@@ -207,5 +207,16 @@ export async function deleteProjectWithHostingCleanup(params: {
 
   await Promise.all(resources.artifactKeys.map((key) => artifactStore.deletePrefix(key)));
 
+  const attachmentStorageKeys = resources.attachmentStorageKeys ?? [];
+  if (attachmentStorageKeys.length > 0) {
+    await Promise.all(
+      attachmentStorageKeys.map((key) =>
+        artifactStore.deleteObject
+          ? artifactStore.deleteObject(key)
+          : artifactStore.deletePrefix(key)
+      )
+    );
+  }
+
   return deleteProject(database, { projectId: params.projectId, userId: params.userId });
 }

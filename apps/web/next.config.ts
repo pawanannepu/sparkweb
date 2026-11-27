@@ -3,7 +3,7 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@spark/db", "@spark/sandbox", "@spark/shared"],
-  serverExternalPackages: ["@electric-sql/pglite", "postgres"],
+  serverExternalPackages: ["@electric-sql/pglite", "postgres", "sharp"],
   async headers() {
     const crossOriginIsolationHeaders = [
       {

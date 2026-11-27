@@ -1,4 +1,14 @@
-import { and, db, desc, eq, projects, promptMessages, promptThreads, snapshots } from "@spark/db";
+import {
+  and,
+  db,
+  desc,
+  eq,
+  projects,
+  promptMessages,
+  promptThreads,
+  snapshots,
+  startOutlineBuildTransaction,
+} from "@spark/db";
 import {
   type FileOperation,
   type GenerationPlan,
@@ -7,7 +17,15 @@ import {
   type SnapshotFilesMap,
   STARTER_TEMPLATE_FILES,
 } from "@spark/sandbox";
-import { type AiProvider, isAiProvider, resolveModelProvider } from "@spark/shared";
+import {
+  type AiProvider,
+  type DesignOutlinePayload,
+  DesignOutlinePayloadSchema,
+  formatConfirmedOutlineForPrompt,
+  getEffectiveOutlinePayload,
+  isAiProvider,
+  resolveModelProvider,
+} from "@spark/shared";
 import { generateText } from "ai";
 import { type NextRequest, NextResponse } from "next/server";
 import {
@@ -16,6 +34,8 @@ import {
   resolveProviderApiKey,
 } from "@/lib/ai-provider";
 import { getCurrentUser } from "@/lib/auth";
+import { handleMultimodalRouteError } from "@/lib/multimodal/serializers";
+import { isValidUuid } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +71,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     model?: string;
     provider?: string;
     activeFiles?: string[];
+    outlineId?: string;
+    editedOutline?: unknown;
   };
   try {
     body = await req.json();
@@ -58,8 +80,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-  if (!prompt) {
+  const outlineId = typeof body.outlineId === "string" ? body.outlineId.trim() : "";
+  if (outlineId && !isValidUuid(outlineId)) {
+    return NextResponse.json({ error: "Invalid outlineId" }, { status: 400 });
+  }
+
+  let validatedEditedOutline: DesignOutlinePayload | undefined;
+  if (body.editedOutline !== undefined) {
+    const parsedOutline = DesignOutlinePayloadSchema.safeParse(body.editedOutline);
+    if (!parsedOutline.success) {
+      return NextResponse.json(
+        { error: parsedOutline.error.issues[0]?.message ?? "Invalid editedOutline payload" },
+        { status: 400 }
+      );
+    }
+    validatedEditedOutline = parsedOutline.data;
+  }
+
+  let prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+  if (!prompt && !outlineId) {
     return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
   }
 
@@ -98,65 +137,93 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     );
   }
 
-  // 5. Resolve prompt thread
+  // 5. Resolve prompt thread and confirm design outline (when building from outlineId)
   let threadId = body.threadId;
-  if (!threadId) {
-    const existingThreads = await db
-      .select({ id: promptThreads.id })
-      .from(promptThreads)
-      .where(eq(promptThreads.projectId, projectId))
-      .orderBy(promptThreads.createdAt)
+  let assistantMessageId: string | undefined;
+  let confirmedOutlineContext: string | null = null;
+  let confirmedOutlinePayload: DesignOutlinePayload | null = null;
+
+  if (outlineId) {
+    try {
+      const started = await startOutlineBuildTransaction(db, {
+        projectId,
+        outlineId,
+        userId: user.id,
+        editedOutline: validatedEditedOutline,
+      });
+      threadId = started.threadId;
+      assistantMessageId = started.assistantMessage.id;
+      const effectiveOutline = getEffectiveOutlinePayload({
+        extractedOutline: started.outline.extractedOutline,
+        editedOutline: started.outline.editedOutline,
+      });
+      confirmedOutlinePayload = effectiveOutline;
+      confirmedOutlineContext = formatConfirmedOutlineForPrompt(effectiveOutline);
+      if (!prompt) {
+        prompt = started.sourceUserContent || effectiveOutline.appSummary;
+      }
+    } catch (err) {
+      return handleMultimodalRouteError(err, "Failed to lock design outline for build");
+    }
+  } else {
+    if (!threadId) {
+      const existingThreads = await db
+        .select({ id: promptThreads.id })
+        .from(promptThreads)
+        .where(eq(promptThreads.projectId, projectId))
+        .orderBy(promptThreads.createdAt)
+        .limit(1);
+
+      if (existingThreads.length > 0 && existingThreads[0]) {
+        threadId = existingThreads[0].id;
+      } else {
+        const createdThread = await db
+          .insert(promptThreads)
+          .values({
+            projectId,
+            title: "Main thread",
+          })
+          .returning();
+        threadId = createdThread[0]?.id;
+      }
+    }
+
+    if (!threadId) {
+      return NextResponse.json({ error: "Failed to resolve prompt thread" }, { status: 500 });
+    }
+
+    // 6. Record user message
+    const lastMessages = await db
+      .select({ seq: promptMessages.seq })
+      .from(promptMessages)
+      .where(eq(promptMessages.threadId, threadId))
+      .orderBy(desc(promptMessages.seq))
       .limit(1);
 
-    if (existingThreads.length > 0 && existingThreads[0]) {
-      threadId = existingThreads[0].id;
-    } else {
-      const createdThread = await db
-        .insert(promptThreads)
-        .values({
-          projectId,
-          title: "Main thread",
-        })
-        .returning();
-      threadId = createdThread[0]?.id;
-    }
-  }
+    const nextSeq = (lastMessages[0]?.seq ?? 0) + 1;
 
-  if (!threadId) {
-    return NextResponse.json({ error: "Failed to resolve prompt thread" }, { status: 500 });
-  }
-
-  // 6. Record user message
-  const lastMessages = await db
-    .select({ seq: promptMessages.seq })
-    .from(promptMessages)
-    .where(eq(promptMessages.threadId, threadId))
-    .orderBy(desc(promptMessages.seq))
-    .limit(1);
-
-  const nextSeq = (lastMessages[0]?.seq ?? 0) + 1;
-
-  await db.insert(promptMessages).values({
-    threadId,
-    seq: nextSeq,
-    role: "user",
-    content: prompt,
-    status: "completed",
-  });
-
-  // 7. Create assistant message in streaming state
-  const assistantResult = await db
-    .insert(promptMessages)
-    .values({
+    await db.insert(promptMessages).values({
       threadId,
-      seq: nextSeq + 1,
-      role: "assistant",
-      content: "",
-      status: "streaming",
-    })
-    .returning();
+      seq: nextSeq,
+      role: "user",
+      content: prompt,
+      status: "completed",
+    });
 
-  const assistantMessageId = assistantResult[0]?.id;
+    // 7. Create assistant message in streaming state
+    const assistantResult = await db
+      .insert(promptMessages)
+      .values({
+        threadId,
+        seq: nextSeq + 1,
+        role: "assistant",
+        content: "",
+        status: "streaming",
+      })
+      .returning();
+
+    assistantMessageId = assistantResult[0]?.id;
+  }
 
   // 8. Ingest current file tree
   let currentFiles: SnapshotFilesMap = { ...STARTER_TEMPLATE_FILES };
@@ -240,10 +307,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           ].join("\n"),
           prompt: [
             `User request:\n${prompt}`,
+            confirmedOutlineContext ? `\n${confirmedOutlineContext}` : "",
             "",
             "Current project files:",
             buildGenerationPromptContext(currentFiles),
-          ].join("\n"),
+          ]
+            .filter(Boolean)
+            .join("\n"),
         });
 
         const parsedOutput = parseGeneratedFilesPayload(aiResult.text);
@@ -279,7 +349,63 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         const lowerPrompt = prompt.toLowerCase();
         let updatedAppContent = currentFiles["src/App.tsx"]?.content || "";
 
-        if (lowerPrompt.includes("todo") || lowerPrompt.includes("task")) {
+        if (confirmedOutlinePayload) {
+          const primaryHex = JSON.stringify(confirmedOutlinePayload.palette[0]?.hex ?? "#4F46E5");
+          const enabledSections = confirmedOutlinePayload.layoutSections
+            .filter((s) => s.enabled)
+            .map((s) => s.name);
+          const safeSummaryJson = JSON.stringify(confirmedOutlinePayload.appSummary);
+          const safeFontFamilyJson = JSON.stringify(
+            `${confirmedOutlinePayload.typography.headingFont}, sans-serif`
+          );
+          const safeSectionsJson = JSON.stringify(enabledSections);
+
+          updatedAppContent = `import React, { useState } from "react";
+import { Sparkles, CheckCircle2 } from "lucide-react";
+
+const SECTIONS: string[] = ${safeSectionsJson};
+const APP_SUMMARY = ${safeSummaryJson};
+const PRIMARY_HEX = ${primaryHex};
+const HEADING_FONT = ${safeFontFamilyJson};
+
+export default function App() {
+  const [activeSection, setActiveSection] = useState(SECTIONS[0] ?? "Overview");
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-6">
+      <div className="w-full max-w-2xl bg-slate-900/80 border border-slate-800 rounded-2xl p-8 shadow-2xl">
+        <div className="flex items-center gap-3 mb-4">
+          <div
+            className="h-10 w-10 rounded-xl flex items-center justify-center text-white"
+            style={{ backgroundColor: PRIMARY_HEX }}
+          >
+            <Sparkles className="h-5 w-5" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold text-white" style={{ fontFamily: HEADING_FONT }}>
+              {APP_SUMMARY}
+            </h1>
+            <p className="text-xs text-slate-400">Built from confirmed design outline</p>
+          </div>
+        </div>
+        <div className="grid gap-3 mt-6">
+          {SECTIONS.map((section) => (
+            <button
+              key={section}
+              type="button"
+              onClick={() => setActiveSection(section)}
+              className="flex items-center justify-between p-3 rounded-xl border border-slate-800 bg-slate-950/70 text-left hover:border-slate-700 transition"
+            >
+              <span className="text-sm font-medium text-slate-200">{section}</span>
+              {activeSection === section && <CheckCircle2 className="h-4 w-4 text-emerald-400" />}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}`;
+        } else if (lowerPrompt.includes("todo") || lowerPrompt.includes("task")) {
           updatedAppContent = `import React, { useState } from "react";
 import { CheckSquare, Plus, Trash2, Sparkles } from "lucide-react";
 

@@ -153,4 +153,144 @@ describe("useAiSettings hook", () => {
     expect(result.current.selectedProvider).toBe("openai");
     expect(result.current.directModels.map((m) => m.id)).toEqual(["gpt-4.1"]);
   });
+
+  it("preserves a custom :free OpenRouter model ID when the OpenRouter key has a $0 freeOnly budget", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (url === "/api/keys") {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                keys: [
+                  {
+                    provider: "openrouter",
+                    keyHint: "sk-o...1234",
+                    updatedAt: "2026-11-26T00:00:00.000Z",
+                  },
+                ],
+                envProviders: [],
+              }),
+              { status: 200 }
+            )
+          );
+        }
+
+        if (url.startsWith("/api/ai/models")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                configuredProviders: ["openrouter"],
+                openRouterKeyBudget: {
+                  hasKey: true,
+                  freeOnly: true,
+                  limitUsd: 0,
+                  remainingUsd: 0,
+                  isFreeTier: false,
+                },
+                providerModels: {
+                  openrouter: [
+                    {
+                      id: "openrouter/free",
+                      name: "Router: openrouter/free",
+                      provider: "openrouter",
+                      tier: "free",
+                      supportsVision: true,
+                    },
+                  ],
+                  anthropic: [],
+                  openai: [],
+                  gemini: [],
+                },
+              }),
+              { status: 200 }
+            )
+          );
+        }
+
+        return Promise.resolve(new Response(JSON.stringify({}), { status: 404 }));
+      })
+    );
+
+    const { result } = renderHook(() => useAiSettings());
+
+    await waitFor(() => {
+      expect(result.current.selectedModel).toBe("openrouter/free");
+    });
+
+    act(() => {
+      result.current.setSelectedModel("custom/my-experimental-vision-model:free");
+    });
+
+    expect(result.current.selectedModel).toBe("custom/my-experimental-vision-model:free");
+    expect(result.current.selectedProvider).toBe("openrouter");
+  });
+
+  // covers: AC-3
+  it("falls back away from a paid unlisted OpenRouter model when freeOnly budget is active", async () => {
+    window.localStorage.setItem("sparkweb:selected-model", "anthropic/claude-opus-4-unlisted");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (url === "/api/keys") {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                keys: [
+                  {
+                    provider: "openrouter",
+                    keyHint: "sk-o...1234",
+                    updatedAt: "2026-11-26T00:00:00.000Z",
+                  },
+                ],
+                envProviders: [],
+              }),
+              { status: 200 }
+            )
+          );
+        }
+
+        if (url.startsWith("/api/ai/models")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                configuredProviders: ["openrouter"],
+                openRouterKeyBudget: {
+                  hasKey: true,
+                  freeOnly: true,
+                  limitUsd: 0,
+                  remainingUsd: 0,
+                  isFreeTier: false,
+                },
+                providerModels: {
+                  openrouter: [
+                    {
+                      id: "openrouter/free",
+                      name: "Router: openrouter/free",
+                      provider: "openrouter",
+                      tier: "free",
+                      supportsVision: true,
+                    },
+                  ],
+                  anthropic: [],
+                  openai: [],
+                  gemini: [],
+                },
+              }),
+              { status: 200 }
+            )
+          );
+        }
+
+        return Promise.resolve(new Response(JSON.stringify({}), { status: 404 }));
+      })
+    );
+
+    const { result } = renderHook(() => useAiSettings());
+
+    await waitFor(() => {
+      expect(result.current.selectedModel).toBe("openrouter/free");
+    });
+  });
 });

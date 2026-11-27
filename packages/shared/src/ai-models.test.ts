@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  DIRECT_MODELS,
   formatAnthropicModel,
   formatGeminiModel,
   formatOpenAiModel,
   formatOpenRouterModel,
+  isDirectModelVisionCapable,
   isGeminiTextModel,
   isOpenAiChatModel,
   isOpenRouterModelId,
+  isVisionCapableOpenRouterModel,
+  OPENROUTER_DEFAULT_MODELS,
   resolveModelProvider,
 } from "./ai-models";
 
@@ -96,7 +100,42 @@ describe("ai-models shared helpers", () => {
       id: "gemini-2.5-flash",
       name: "Gemini 2.5 Flash",
       provider: "gemini",
+      supportsVision: true,
       contextLength: 1048576,
     });
+  });
+
+  // covers: AC-2, AC-3
+  it("detects vision capability across OpenRouter and direct provider models", () => {
+    expect(
+      isVisionCapableOpenRouterModel({
+        id: "anthropic/claude-sonnet-4",
+        architecture: { input_modalities: ["text", "image"] },
+      })
+    ).toBe(true);
+    expect(
+      isVisionCapableOpenRouterModel({
+        id: "legacy/vision",
+        architecture: { modality: "text+image->text" },
+      })
+    ).toBe(true);
+    expect(
+      isVisionCapableOpenRouterModel({
+        id: "deepseek/deepseek-r1",
+        architecture: { input_modalities: ["text"], modality: "text->text" },
+      })
+    ).toBe(false);
+
+    expect(isDirectModelVisionCapable("anthropic", "claude-3-7-sonnet")).toBe(true);
+    expect(isDirectModelVisionCapable("openai", "gpt-4o")).toBe(true);
+    expect(isDirectModelVisionCapable("openai", "o3-mini")).toBe(false);
+    expect(isDirectModelVisionCapable("gemini", "gemini-2.5-flash")).toBe(true);
+    expect(isDirectModelVisionCapable("openrouter", "deepseek/deepseek-r1")).toBe(false);
+    expect(isDirectModelVisionCapable("openrouter", "anthropic/claude-sonnet-4")).toBe(true);
+
+    expect(DIRECT_MODELS.every((m) => typeof m.supportsVision === "boolean")).toBe(true);
+    expect(OPENROUTER_DEFAULT_MODELS.every((m) => typeof m.supportsVision === "boolean")).toBe(
+      true
+    );
   });
 });

@@ -15,6 +15,7 @@ export interface ArtifactStore {
   uploadDirectory(prefix: string, localDirPath: string): Promise<ArtifactUploadSummary>;
   putObject(key: string, body: Uint8Array, contentType: string): Promise<void>;
   getObject(key: string): Promise<ArtifactObject | null>;
+  deleteObject?(key: string): Promise<void>;
   deletePrefix(prefix: string): Promise<void>;
 }
 

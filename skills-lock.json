@@ -1,6 +1,13 @@
 {
   "version": 2,
   "skills": {
+    "cheerio-parsing": {
+      "source": "Mindrally/skills",
+      "commit": "7682ca77710e0971eab4e0ae5dddfa281aea0ba5",
+      "sourceType": "github",
+      "skillPath": "cheerio-parsing/SKILL.md",
+      "computedHash": "84feb1cffbdcf5a16b1fed1ad729e004bc70091178d68535ff6be15e8ef93083"
+    },
     "cloudflare": {
       "source": "cloudflare/skills",
       "commit": "ff191de7d903788eceaf516a514ae7d3b56b924a",

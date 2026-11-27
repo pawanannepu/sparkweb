@@ -9,6 +9,7 @@ export interface AiModelOption {
   name: string;
   provider: AiProvider;
   tier: AiModelTier;
+  supportsVision: boolean;
   badge?: string;
   contextLength?: number;
   pricingLabel?: string;
@@ -42,6 +43,7 @@ export const DIRECT_MODELS: readonly AiModelOption[] = [
     name: "Claude 3.7 Sonnet",
     provider: "anthropic",
     tier: "paid",
+    supportsVision: true,
     badge: "Default",
   },
   {
@@ -49,6 +51,7 @@ export const DIRECT_MODELS: readonly AiModelOption[] = [
     name: "GPT-4o",
     provider: "openai",
     tier: "paid",
+    supportsVision: true,
     badge: "OpenAI",
   },
   {
@@ -56,6 +59,7 @@ export const DIRECT_MODELS: readonly AiModelOption[] = [
     name: "Gemini 2.0 Flash",
     provider: "gemini",
     tier: "paid",
+    supportsVision: true,
     badge: "Google",
   },
 ];
@@ -66,6 +70,7 @@ export const OPENROUTER_DEFAULT_MODELS: readonly AiModelOption[] = [
     name: "Qwen 2.5 Coder 32B",
     provider: "openrouter",
     tier: "free",
+    supportsVision: false,
     badge: "Free",
     pricingLabel: "Free",
   },
@@ -74,6 +79,7 @@ export const OPENROUTER_DEFAULT_MODELS: readonly AiModelOption[] = [
     name: "DeepSeek V3 0324",
     provider: "openrouter",
     tier: "free",
+    supportsVision: false,
     badge: "Free",
     pricingLabel: "Free",
   },
@@ -82,6 +88,7 @@ export const OPENROUTER_DEFAULT_MODELS: readonly AiModelOption[] = [
     name: "Llama 3.3 70B Instruct",
     provider: "openrouter",
     tier: "free",
+    supportsVision: false,
     badge: "Free",
     pricingLabel: "Free",
   },
@@ -90,6 +97,7 @@ export const OPENROUTER_DEFAULT_MODELS: readonly AiModelOption[] = [
     name: "Gemini 2.0 Flash Exp",
     provider: "openrouter",
     tier: "free",
+    supportsVision: true,
     badge: "Free",
     pricingLabel: "Free",
   },
@@ -98,6 +106,7 @@ export const OPENROUTER_DEFAULT_MODELS: readonly AiModelOption[] = [
     name: "Mistral Devstral Small",
     provider: "openrouter",
     tier: "free",
+    supportsVision: false,
     badge: "Free",
     pricingLabel: "Free",
   },
@@ -106,6 +115,7 @@ export const OPENROUTER_DEFAULT_MODELS: readonly AiModelOption[] = [
     name: "Claude Sonnet 4",
     provider: "openrouter",
     tier: "paid",
+    supportsVision: true,
     badge: "Paid",
   },
   {
@@ -113,6 +123,7 @@ export const OPENROUTER_DEFAULT_MODELS: readonly AiModelOption[] = [
     name: "Claude 3.7 Sonnet",
     provider: "openrouter",
     tier: "paid",
+    supportsVision: true,
     badge: "Paid",
   },
   {
@@ -120,6 +131,7 @@ export const OPENROUTER_DEFAULT_MODELS: readonly AiModelOption[] = [
     name: "GPT-4o",
     provider: "openrouter",
     tier: "paid",
+    supportsVision: true,
     badge: "Paid",
   },
   {
@@ -127,6 +139,7 @@ export const OPENROUTER_DEFAULT_MODELS: readonly AiModelOption[] = [
     name: "OpenAI o3-mini",
     provider: "openrouter",
     tier: "paid",
+    supportsVision: false,
     badge: "Paid",
   },
   {
@@ -134,6 +147,7 @@ export const OPENROUTER_DEFAULT_MODELS: readonly AiModelOption[] = [
     name: "Gemini 2.5 Pro",
     provider: "openrouter",
     tier: "paid",
+    supportsVision: true,
     badge: "Paid",
   },
   {
@@ -141,6 +155,7 @@ export const OPENROUTER_DEFAULT_MODELS: readonly AiModelOption[] = [
     name: "DeepSeek V3",
     provider: "openrouter",
     tier: "paid",
+    supportsVision: false,
     badge: "Paid",
   },
   {
@@ -148,6 +163,7 @@ export const OPENROUTER_DEFAULT_MODELS: readonly AiModelOption[] = [
     name: "DeepSeek R1",
     provider: "openrouter",
     tier: "paid",
+    supportsVision: false,
     badge: "Paid",
   },
 ];
@@ -206,6 +222,36 @@ export interface RawOpenRouterModel {
   };
 }
 
+export function isVisionCapableOpenRouterModel(raw: RawOpenRouterModel): boolean {
+  const inputs = raw.architecture?.input_modalities;
+  if (Array.isArray(inputs) && inputs.includes("image")) {
+    return true;
+  }
+  const modality = raw.architecture?.modality;
+  if (typeof modality === "string" && modality.includes("image->")) {
+    return true;
+  }
+  return false;
+}
+
+export function isDirectModelVisionCapable(provider: AiProvider, modelId: string): boolean {
+  const id = modelId.trim().toLowerCase();
+  switch (provider) {
+    case "anthropic":
+      return /^claude-(?:3|4|(?:sonnet|opus|haiku)-4)/i.test(id);
+    case "openai":
+      return /^(?:gpt-4o|gpt-4\.1|gpt-4\.5|gpt-4-turbo|gpt-5|chatgpt-4o|o1(?!-mini|-preview)|o3(?!-mini)|o4-mini)/i.test(
+        id
+      );
+    case "gemini":
+      return /^gemini-(?:1\.5|2\.|3\.|exp|pro-vision)/i.test(id);
+    case "openrouter": {
+      const known = OPENROUTER_DEFAULT_MODELS.find((m) => m.id.toLowerCase() === id);
+      return known?.supportsVision ?? false;
+    }
+  }
+}
+
 export function isTextCapableOpenRouterModel(raw: RawOpenRouterModel): boolean {
   const outputs = raw.architecture?.output_modalities;
   if (!Array.isArray(outputs) || outputs.length === 0) {
@@ -248,6 +294,7 @@ export function formatOpenRouterModel(raw: RawOpenRouterModel): AiModelOption {
     name: raw.name?.trim() || raw.id,
     provider: "openrouter",
     tier,
+    supportsVision: isVisionCapableOpenRouterModel(raw),
     badge: tier === "free" ? "Free" : "Paid",
     contextLength: raw.context_length,
     pricingLabel,
@@ -266,6 +313,7 @@ export function formatAnthropicModel(raw: RawAnthropicModel): AiModelOption {
     name: raw.display_name?.trim() || raw.id,
     provider: "anthropic",
     tier: "paid",
+    supportsVision: isDirectModelVisionCapable("anthropic", raw.id),
     badge: "Anthropic",
   };
 }
@@ -308,6 +356,7 @@ export function formatOpenAiModel(raw: RawOpenAiModel): AiModelOption {
     name: raw.id,
     provider: "openai",
     tier: "paid",
+    supportsVision: isDirectModelVisionCapable("openai", raw.id),
     badge: "OpenAI",
   };
 }
@@ -345,6 +394,7 @@ export function formatGeminiModel(raw: RawGeminiModel): AiModelOption {
     name: raw.displayName?.trim() || id,
     provider: "gemini",
     tier: "paid",
+    supportsVision: isDirectModelVisionCapable("gemini", id),
     badge: "Google",
     contextLength: raw.inputTokenLimit,
   };

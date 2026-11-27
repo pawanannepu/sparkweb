@@ -588,4 +588,160 @@ import { Card } from './ui';`;
       { path: "src/ui/index.tsx", content: "export const Card = () => null;" },
     ]);
   });
+
+  // covers: AC-3, AC-7
+  it("extracts design outline, handles structured extraction error, and clears error state", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: false,
+      status: 422,
+      json: async () => ({
+        error: "Empty JS shell",
+        code: "URL_JS_SHELL",
+        suggestion: "Paste a screenshot instead.",
+      }),
+    } as unknown as Response);
+
+    const onProviderKeyMissing = vi.fn();
+    const { result } = renderHook(() =>
+      useGenerationLoop({
+        projectId: "proj_123",
+        threadId: "thread_123",
+        onProviderKeyMissing,
+      })
+    );
+
+    let outlineTurn: unknown;
+    await act(async () => {
+      outlineTurn = await result.current.extractOutline({
+        prompt: "",
+        model: "claude-3-7-sonnet",
+        attachmentIds: [],
+        sourceUrl: "https://spa.example.com",
+      });
+    });
+
+    expect(outlineTurn).toBeNull();
+    expect(result.current.isExtractingOutline).toBe(false);
+    expect(result.current.extractionError).toEqual({
+      message: "Empty JS shell",
+      code: "URL_JS_SHELL",
+      suggestion: "Paste a screenshot instead.",
+    });
+
+    act(() => {
+      result.current.clearExtractionError();
+    });
+    expect(result.current.extractionError).toBeNull();
+
+    // PROVIDER_KEY_MISSING triggers callback
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        error: "PROVIDER_KEY_MISSING",
+        provider: "openai",
+        message: "Missing key",
+      }),
+    } as unknown as Response);
+
+    await act(async () => {
+      await result.current.extractOutline({
+        prompt: "Design app",
+        model: "gpt-4o",
+        attachmentIds: ["att-1"],
+      });
+    });
+    expect(onProviderKeyMissing).toHaveBeenCalledWith("openai");
+
+    // Successful extraction
+    const mockTurn = {
+      outline: { id: "out-1", status: "ready" },
+      userMessage: { id: "u-1" },
+      outlineMessage: { id: "a-1" },
+      attachments: [],
+    };
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockTurn,
+    } as unknown as Response);
+
+    await act(async () => {
+      outlineTurn = await result.current.extractOutline({
+        prompt: "Design app",
+        model: "gpt-4o",
+        attachmentIds: ["att-1"],
+        visionOverride: true,
+      });
+    });
+    expect(outlineTurn).toEqual(mockTurn);
+  });
+
+  // covers: AC-9
+  it("submits Stage 2 build from confirmed outline and commits verified snapshot", async () => {
+    const encoder = new TextEncoder();
+    const generateStream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'event: plan\ndata: {"messageId":"msg_build_1","steps":[{"id":"step-3","title":"Verify","status":"pending"}]}\n\n'
+          )
+        );
+        controller.enqueue(
+          encoder.encode(
+            'event: file_op\ndata: {"path":"src/App.tsx","op":"write","content":"export default function App() { return <h1>Outline App</h1>; }"}\n\n'
+          )
+        );
+        controller.enqueue(encoder.encode('event: finish\ndata: {"messageId":"msg_build_1"}\n\n'));
+        controller.close();
+      },
+    });
+
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({ ok: true, body: generateStream } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: "snap_outline_1", treeHash: "hash_outline_1" }),
+      } as unknown as Response);
+
+    const requestHealthCheck = vi.fn().mockResolvedValue({ healthy: true });
+    const onFinish = vi.fn();
+
+    const { result } = renderHook(() =>
+      useGenerationLoop({
+        projectId: "proj_123",
+        requestHealthCheck,
+        onFinish,
+      })
+    );
+
+    const editedOutline = {
+      appSummary: "Edited App",
+      palette: [{ id: "p1", role: "Primary", hex: "#2563EB", usage: "CTA" }],
+      typography: { headingFont: "Inter", bodyFont: "Inter", scaleNotes: "Clean" },
+      layoutSections: [{ id: "s1", name: "Header", description: "Top", enabled: true }],
+      componentHierarchy: [{ id: "c1", name: "AppShell", role: "Root", enabled: true }],
+      additionalNotes: "",
+    };
+
+    let ok = false;
+    await act(async () => {
+      ok = await result.current.submitBuildFromOutline({
+        outlineId: "out-123",
+        editedOutline,
+        model: "claude-3-7-sonnet",
+        promptSummary: "Edited App",
+      });
+    });
+
+    expect(ok).toBe(true);
+    const generateCall = vi.mocked(fetch).mock.calls[0];
+    expect(generateCall?.[0]).toBe("/api/projects/proj_123/generate");
+    expect(JSON.parse((generateCall?.[1]?.body as string) || "{}")).toEqual({
+      outlineId: "out-123",
+      editedOutline,
+      model: "claude-3-7-sonnet",
+      provider: "anthropic",
+    });
+    expect(onFinish).toHaveBeenCalledWith("snap_outline_1", "hash_outline_1");
+  });
 });

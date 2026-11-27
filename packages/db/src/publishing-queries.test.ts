@@ -36,7 +36,7 @@ import {
   updateProjectSubdomain,
   validateSubdomain,
 } from "./queries";
-import { projects, promptMessages, promptThreads, users } from "./schema/index";
+import { designAttachments, projects, promptMessages, promptThreads, users } from "./schema/index";
 
 describe("publishing queries integration with PGlite", () => {
   let pglite: PGlite;
@@ -448,11 +448,49 @@ describe("publishing queries integration with PGlite", () => {
     expect(page2.items).toHaveLength(1);
     expect(page2.items[0]?.id).not.toBe(page1.items[0]?.id);
 
+    const [thread] = await testDb
+      .insert(promptThreads)
+      .values({ projectId: project.id, title: "Main" })
+      .returning();
+    if (!thread) throw new Error("Failed to create thread");
+
+    await testDb.insert(designAttachments).values([
+      {
+        projectId: project.id,
+        threadId: thread.id,
+        kind: "image",
+        storageKey: `attachments/${project.id}/img-1`,
+        fileName: "a.png",
+        mimeType: "image/png",
+        sizeBytes: 120,
+        width: 100,
+        height: 100,
+      },
+      {
+        projectId: project.id,
+        threadId: thread.id,
+        kind: "image",
+        storageKey: `attachments/${project.id}/img-1`,
+        fileName: "a-dup.png",
+        mimeType: "image/png",
+        sizeBytes: 120,
+        width: 100,
+        height: 100,
+      },
+      {
+        projectId: project.id,
+        threadId: thread.id,
+        kind: "url",
+        sourceUrl: "https://example.com",
+      },
+    ]);
+
     const resources = await getProjectDeletionResources(testDb, {
       projectId: project.id,
       userId: ownerId,
     });
     expect(resources.artifactKeys).toHaveLength(2);
+    expect(resources.attachmentStorageKeys).toEqual([`attachments/${project.id}/img-1`]);
 
     await deleteProject(testDb, { projectId: project.id, userId: ownerId });
     await expect(

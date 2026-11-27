@@ -195,9 +195,10 @@ describe("deploy-service orchestration", () => {
     expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
-  // covers: AC-5, AC-9
-  it("cleans up routes, custom hostnames, and artifact prefixes before deleting project in DB", async () => {
+  // covers: AC-5, AC-9, AC-10
+  it("cleans up routes, custom hostnames, artifact prefixes, and attachment objects before deleting project in DB", async () => {
     const artifactStore = createMockArtifactStore();
+    artifactStore.deleteObject = vi.fn().mockResolvedValue(undefined);
     const hostingAdapter = createMockHostingAdapter();
 
     dbMocks.getProjectDeletionResources.mockResolvedValueOnce({
@@ -208,6 +209,7 @@ describe("deploy-service orchestration", () => {
         providerHostnameId: "cf-host-99",
       },
       artifactKeys: ["deployments/proj-1/dep-1", "deployments/proj-1/dep-2"],
+      attachmentStorageKeys: ["attachments/proj-1/att-1", "attachments/proj-1/att-2"],
     });
     dbMocks.deleteProject.mockResolvedValueOnce({ success: true });
 
@@ -224,6 +226,8 @@ describe("deploy-service orchestration", () => {
     expect(hostingAdapter.deleteRoute).toHaveBeenCalledWith("demo-app.localhost");
     expect(hostingAdapter.deleteCustomHostname).toHaveBeenCalledWith("cf-host-99");
     expect(artifactStore.deletePrefix).toHaveBeenCalledTimes(2);
+    expect(artifactStore.deleteObject).toHaveBeenCalledTimes(2);
+    expect(artifactStore.deleteObject).toHaveBeenCalledWith("attachments/proj-1/att-1");
     expect(dbMocks.deleteProject).toHaveBeenCalledWith(expect.anything(), {
       projectId: "proj-1",
       userId: "user-1",

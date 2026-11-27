@@ -3,6 +3,9 @@
 import { computeErrorFingerprint } from "@spark/sandbox";
 import {
   type AiProvider,
+  type DesignAttachmentDto,
+  type DesignOutlineDto,
+  type DesignOutlinePayload,
   type FileOperation,
   type HealingAttempt,
   type HealingCategory,
@@ -13,8 +16,38 @@ import {
   type PreviewHealthStatusPayload,
   type ProjectFile,
   resolveModelProvider,
+  type ThreadMessageDto,
 } from "@spark/shared";
 import { useCallback, useRef, useState } from "react";
+
+export interface ExtractionErrorState {
+  message: string;
+  code?: string;
+  suggestion?: string;
+}
+
+export interface OutlineExtractionTurnResult {
+  outline: DesignOutlineDto;
+  userMessage: ThreadMessageDto;
+  outlineMessage: ThreadMessageDto;
+  attachments: DesignAttachmentDto[];
+}
+
+export interface ExtractOutlineParams {
+  prompt: string;
+  model?: string;
+  threadId?: string;
+  attachmentIds: string[];
+  sourceUrl?: string;
+  visionOverride?: boolean;
+}
+
+export interface SubmitBuildFromOutlineParams {
+  outlineId: string;
+  editedOutline?: DesignOutlinePayload;
+  model?: string;
+  promptSummary?: string;
+}
 
 export interface UseGenerationLoopOptions {
   projectId: string;
@@ -30,12 +63,17 @@ export interface UseGenerationLoopOptions {
 
 export interface UseGenerationLoopReturn {
   isStreaming: boolean;
+  isExtractingOutline: boolean;
+  extractionError: ExtractionErrorState | null;
+  clearExtractionError: () => void;
   planSteps: PlanStep[];
   fileOperations: FileOperation[];
   activeFiles: ProjectFile[];
   error: string | null;
   healingTelemetry: HealingTelemetry;
   submitPrompt: (prompt: string, model?: string) => Promise<void>;
+  extractOutline: (params: ExtractOutlineParams) => Promise<OutlineExtractionTurnResult | null>;
+  submitBuildFromOutline: (params: SubmitBuildFromOutlineParams) => Promise<boolean>;
   triggerRepair: (error: PreviewErrorPayload, model?: string) => Promise<void>;
   cancelGeneration: () => void;
   reset: () => void;
@@ -99,11 +137,17 @@ export function useGenerationLoop({
   onHealingTelemetryChange,
 }: UseGenerationLoopOptions): UseGenerationLoopReturn {
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isExtractingOutline, setIsExtractingOutline] = useState(false);
+  const [extractionError, setExtractionError] = useState<ExtractionErrorState | null>(null);
   const [planSteps, setPlanSteps] = useState<PlanStep[]>([]);
   const [fileOperations, setFileOperations] = useState<FileOperation[]>([]);
   const [activeFiles, setActiveFiles] = useState<ProjectFile[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [healingTelemetry, setHealingTelemetry] = useState<HealingTelemetry>(INITIAL_TELEMETRY);
+
+  const clearExtractionError = useCallback(() => {
+    setExtractionError(null);
+  }, []);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const activeFilesRef = useRef<ProjectFile[]>([]);
@@ -123,6 +167,7 @@ export function useGenerationLoop({
     setActiveFiles([]);
     activeFilesRef.current = [];
     setError(null);
+    setExtractionError(null);
     updateTelemetry(INITIAL_TELEMETRY);
     lastAssistantMessageIdRef.current = null;
   }, [updateTelemetry]);
@@ -548,10 +593,14 @@ export function useGenerationLoop({
     [isStreaming, onError, runSelfHealingVerificationLoop]
   );
 
-  // Submit Prompt Implementation
-  const submitPrompt = useCallback(
-    async (prompt: string, model?: string) => {
-      if (!prompt.trim() || isStreaming) return;
+  // Shared SSE runner for both text prompts and confirmed outline builds
+  const runGenerationStream = useCallback(
+    async (params: {
+      requestBody: Record<string, unknown>;
+      turnDescription: string;
+      model?: string;
+    }): Promise<boolean> => {
+      if (isStreaming || isExtractingOutline) return false;
 
       setIsStreaming(true);
       setError(null);
@@ -563,18 +612,12 @@ export function useGenerationLoop({
       abortControllerRef.current = controller;
 
       try {
-        const provider = resolveModelProvider(model || "claude-3-7-sonnet");
         const response = await fetch(`/api/projects/${projectId}/generate`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            prompt: prompt.trim(),
-            threadId,
-            model,
-            provider,
-          }),
+          body: JSON.stringify(params.requestBody),
           signal: controller.signal,
         });
 
@@ -692,36 +735,37 @@ export function useGenerationLoop({
           }
         }
 
-        // Direct finish backwards compatibility (if server already committed snapshot)
         if (directSnapshotId) {
           onFinish?.(directSnapshotId, directTreeHash || "");
-          return;
+          return true;
         }
 
-        // Otherwise start verification & self-healing handshake (AC-2, AC-4, AC-7)
         if (assistantMessageId && !controller.signal.aborted) {
           await runSelfHealingVerificationLoop(
             assistantMessageId,
-            prompt,
-            model,
+            params.turnDescription,
+            params.model,
             undefined,
             controller.signal
           );
         }
+        return true;
       } catch (err: unknown) {
         const errorObj = err as Error;
         if (errorObj.name === "AbortError") {
-          return;
+          return false;
         }
         const message = errorObj?.message || "Failed to complete generation";
         setError(message);
         onError?.(message);
+        return false;
       } finally {
         setIsStreaming(false);
         abortControllerRef.current = null;
       }
     },
     [
+      isExtractingOutline,
       isStreaming,
       onError,
       onFileChange,
@@ -729,19 +773,126 @@ export function useGenerationLoop({
       onProviderKeyMissing,
       projectId,
       runSelfHealingVerificationLoop,
-      threadId,
       updateTelemetry,
     ]
   );
 
+  // Submit Text Prompt Implementation
+  const submitPrompt = useCallback(
+    async (prompt: string, model?: string) => {
+      if (!prompt.trim() || isStreaming || isExtractingOutline) return;
+      const provider = resolveModelProvider(model || "claude-3-7-sonnet");
+      await runGenerationStream({
+        requestBody: {
+          prompt: prompt.trim(),
+          threadId,
+          model,
+          provider,
+        },
+        turnDescription: prompt.trim(),
+        model,
+      });
+    },
+    [isExtractingOutline, isStreaming, runGenerationStream, threadId]
+  );
+
+  // Step 1 of Multimodal Flow: Extract Editable Design Outline
+  const extractOutline = useCallback(
+    async (params: ExtractOutlineParams): Promise<OutlineExtractionTurnResult | null> => {
+      if (isStreaming || isExtractingOutline) return null;
+
+      setIsExtractingOutline(true);
+      setExtractionError(null);
+      setError(null);
+
+      try {
+        const modelId = params.model || "claude-3-7-sonnet";
+        const provider = resolveModelProvider(modelId);
+        const res = await fetch(`/api/projects/${projectId}/outlines`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: params.prompt.trim(),
+            threadId: params.threadId ?? threadId,
+            model: modelId,
+            provider,
+            attachmentIds: params.attachmentIds,
+            sourceUrl: params.sourceUrl?.trim() || undefined,
+            visionOverride: params.visionOverride,
+          }),
+        });
+
+        if (!res.ok) {
+          const errData = (await res.json().catch(() => ({}))) as {
+            error?: string;
+            message?: string;
+            code?: string;
+            suggestion?: string;
+            provider?: string;
+          };
+
+          if (
+            errData.error === "PROVIDER_KEY_MISSING" &&
+            typeof errData.provider === "string" &&
+            isAiProvider(errData.provider)
+          ) {
+            onProviderKeyMissing?.(errData.provider);
+          }
+
+          setExtractionError({
+            message:
+              errData.message || errData.error || `Outline extraction failed (${res.status})`,
+            code: errData.code,
+            suggestion: errData.suggestion,
+          });
+          return null;
+        }
+
+        const data = (await res.json()) as OutlineExtractionTurnResult;
+        return data;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to extract design outline";
+        setExtractionError({ message: msg });
+        return null;
+      } finally {
+        setIsExtractingOutline(false);
+      }
+    },
+    [isExtractingOutline, isStreaming, onProviderKeyMissing, projectId, threadId]
+  );
+
+  // Step 2 of Multimodal Flow: Confirm Outline and Stream Code Generation
+  const submitBuildFromOutline = useCallback(
+    async (params: SubmitBuildFromOutlineParams): Promise<boolean> => {
+      const modelId = params.model || "claude-3-7-sonnet";
+      const provider = resolveModelProvider(modelId);
+      return runGenerationStream({
+        requestBody: {
+          outlineId: params.outlineId,
+          editedOutline: params.editedOutline,
+          model: modelId,
+          provider,
+        },
+        turnDescription: params.promptSummary || "Build from confirmed design outline",
+        model: modelId,
+      });
+    },
+    [runGenerationStream]
+  );
+
   return {
     isStreaming,
+    isExtractingOutline,
+    extractionError,
+    clearExtractionError,
     planSteps,
     fileOperations,
     activeFiles,
     error,
     healingTelemetry,
     submitPrompt,
+    extractOutline,
+    submitBuildFromOutline,
     triggerRepair,
     cancelGeneration,
     reset,

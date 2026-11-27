@@ -4,6 +4,8 @@ import {
   accounts,
   apiKeys,
   deployments,
+  designAttachments,
+  designOutlines,
   projectBranches,
   projectDomains,
   projects,
@@ -79,11 +81,12 @@ describe("db schema definitions", () => {
     expect(columns.updatedAt).toBeDefined();
   });
 
-  it("defines prompt_threads and prompt_messages tables with sequencing", () => {
+  it("defines prompt_threads and prompt_messages tables with sequencing and outline lock", () => {
     const threadColumns = getTableColumns(promptThreads);
     expect(threadColumns.id).toBeDefined();
     expect(threadColumns.projectId).toBeDefined();
     expect(threadColumns.title).toBeDefined();
+    expect(threadColumns.outlineLockExpiresAt).toBeDefined();
 
     const messageColumns = getTableColumns(promptMessages);
     expect(messageColumns.id).toBeDefined();
@@ -154,5 +157,36 @@ describe("db schema definitions", () => {
     expect(columns.failureReason).toBeDefined();
     expect(columns.lastCheckedAt).toBeDefined();
     expect(columns.verifiedAt).toBeDefined();
+  });
+
+  // covers: AC-1
+  it("defines design_attachments and design_outlines tables with expected multimodal columns", () => {
+    const attachmentColumns = getTableColumns(designAttachments);
+    expect(attachmentColumns.id).toBeDefined();
+    expect(attachmentColumns.projectId).toBeDefined();
+    expect(attachmentColumns.threadId).toBeDefined();
+    expect(attachmentColumns.messageId).toBeDefined();
+    expect(attachmentColumns.kind).toBeDefined();
+    expect(attachmentColumns.storageKey).toBeDefined();
+    expect(attachmentColumns.sourceUrl).toBeDefined();
+    expect(attachmentColumns.fileName).toBeDefined();
+    expect(attachmentColumns.mimeType).toBeDefined();
+    expect(attachmentColumns.sizeBytes).toBeDefined();
+    expect(attachmentColumns.width).toBeDefined();
+    expect(attachmentColumns.height).toBeDefined();
+    expect(attachmentColumns.urlSnapshot).toBeDefined();
+
+    const outlineColumns = getTableColumns(designOutlines);
+    expect(outlineColumns.id).toBeDefined();
+    expect(outlineColumns.projectId).toBeDefined();
+    expect(outlineColumns.threadId).toBeDefined();
+    expect(outlineColumns.sourceMessageId).toBeDefined();
+    expect(outlineColumns.clonedFromOutlineId).toBeDefined();
+    expect(outlineColumns.outlineMessageId).toBeDefined();
+    expect(outlineColumns.buildMessageId).toBeDefined();
+    expect(outlineColumns.status).toBeDefined();
+    expect(outlineColumns.modelId).toBeDefined();
+    expect(outlineColumns.extractedOutline).toBeDefined();
+    expect(outlineColumns.editedOutline).toBeDefined();
   });
 });

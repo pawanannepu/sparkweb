@@ -2,6 +2,7 @@ import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
 import type { apiKeys } from "./api-keys";
 import type { accounts, sessions, users, verificationTokens } from "./auth";
 import type { deployments } from "./deployments";
+import type { designAttachments, designOutlines } from "./design-inputs";
 import type { projectBranches } from "./project-branches";
 import type { projectDomains } from "./project-domains";
 import type { projectQueries } from "./project-queries";
@@ -12,6 +13,7 @@ import type { snapshots } from "./snapshots";
 export * from "./api-keys";
 export * from "./auth";
 export * from "./deployments";
+export * from "./design-inputs";
 export * from "./project-branches";
 export * from "./project-domains";
 export * from "./project-queries";
@@ -57,3 +59,9 @@ export type NewDeployment = InferInsertModel<typeof deployments>;
 
 export type ProjectQuery = InferSelectModel<typeof projectQueries>;
 export type NewProjectQuery = InferInsertModel<typeof projectQueries>;
+
+export type DesignAttachment = InferSelectModel<typeof designAttachments>;
+export type NewDesignAttachment = InferInsertModel<typeof designAttachments>;
+
+export type DesignOutline = InferSelectModel<typeof designOutlines>;
+export type NewDesignOutline = InferInsertModel<typeof designOutlines>;
