@@ -22,6 +22,13 @@
       "skillPath": "plugins/developer-kit-typescript/skills/drizzle-orm-patterns/SKILL.md",
       "computedHash": "a5eaf7e1ff588b6f03c7fc71fb2850c0bf36fb66949ad41fd012ae1bc70e6c84"
     },
+    "image-ops": {
+      "source": "langchain-ai/design-agent",
+      "commit": "86d8f667796890eb6d3612dbd1b9e941782fe03f",
+      "sourceType": "github",
+      "skillPath": "skills/image-ops/SKILL.md",
+      "computedHash": "cfb15e852a97a11a925d1b5cda0889a10e9f1ffbf209df917b2f6c141a291cd2"
+    },
     "next-dev-loop": {
       "source": "vercel/next.js",
       "commit": "794836c3cbb750d1e34f99e210b39b7bdfbc4c58",
@@ -42,6 +49,13 @@
       "sourceType": "github",
       "skillPath": "skills/playwright-test-generator/SKILL.md",
       "computedHash": "e4cfaf010f9a979d26406f4a1222c09ef4f95564de6ac5d5704fc44e4dec9af1"
+    },
+    "sharp": {
+      "source": "clasen/Skills",
+      "commit": "5bf36074d2ae96d39a8ab9850736361deb9d4fc4",
+      "sourceType": "github",
+      "skillPath": "sharp/SKILL.md",
+      "computedHash": "e0c364b2112135947e2cf88c0df2550ef4ba6b36d885927cb42f50bba8974d7d"
     },
     "tanstack-table": {
       "source": "tanstack-skills/tanstack-skills",

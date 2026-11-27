@@ -1,7 +1,7 @@
 # 0010. Multi modal generation from images and design links
 
 **Date**: 2026-11-27
-**Status**: In Progress
+**Status**: Accepted
 
 ## Summary
 

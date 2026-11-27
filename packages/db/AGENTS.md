@@ -6,12 +6,14 @@ Database layer for sparkweb. Manages PostgreSQL database schemas, connection poo
 
 ## Key files
 
-| File                  | Owns                                                           |
-| --------------------- | -------------------------------------------------------------- |
-| `src/index.ts`        | Entry point exporting client and schema definitions            |
-| `src/client.ts`       | Singleton database connection using postgres.js and Drizzle    |
-| `src/schema/index.ts` | Relational table definitions and relations                     |
-| `drizzle.config.ts`   | Configuration for Drizzle Kit schema generation and migrations |
+| File                          | Owns                                                           |
+| ----------------------------- | -------------------------------------------------------------- |
+| `src/index.ts`                | Entry point exporting client and schema definitions            |
+| `src/client.ts`               | Singleton database connection using postgres.js and Drizzle    |
+| `src/schema/index.ts`         | Relational table definitions and relations                     |
+| `src/schema/design-inputs.ts` | `design_attachments` and `design_outlines` schema declarations |
+| `src/multimodal-queries.ts`   | Extraction leases, outline lifecycle, and stale sweep queries  |
+| `drizzle.config.ts`           | Configuration for Drizzle Kit schema generation and migrations |
 
 ## Commands
 
@@ -41,5 +43,6 @@ pnpm --filter @spark/db db:migrate
 
 - [0001-stack-and-architecture](../../docs/specs/0001-stack-and-architecture/index.md)
 - [0008-managed-database-viewer-and-client-data-tools](../../docs/specs/0008-managed-database-viewer-and-client-data-tools/index.md)
+- [0010-multi-modal-generation](../../docs/specs/0010-multi-modal-generation/index.md)
 
 _Drafted by /audit from the repo, worth a quick human pass. Edit freely: once a line stops matching this draft, later runs treat it as curated and will flag rather than overwrite it._

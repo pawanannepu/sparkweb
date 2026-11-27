@@ -1,7 +1,7 @@
 # 0004. Core generation loop and live preview
 
 **Date**: 2026-11-22
-**Status**: In Progress
+**Status**: Accepted
 
 ## Summary
 

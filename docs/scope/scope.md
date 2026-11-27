@@ -11,17 +11,17 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 
 | # | Feature | Phase | Status |
 |---|---------|-------|--------|
-| 1 | Stack and architecture | Foundation | in-progress |
-| 2 | Coding standards and tooling | Foundation | in-progress |
-| 3 | Data model | Foundation | in-progress |
-| 4 | Design system and UI foundation | Foundation | in-progress |
-| 5 | Core generation loop and live preview | Slice 1 | in-progress |
-| 6 | Visual canvas inspector and direct styling | Slice 2 | in-progress |
+| 1 | Stack and architecture | Foundation | done |
+| 2 | Coding standards and tooling | Foundation | done |
+| 3 | Data model | Foundation | done |
+| 4 | Design system and UI foundation | Foundation | done |
+| 5 | Core generation loop and live preview | Slice 1 | done |
+| 6 | Visual canvas inspector and direct styling | Slice 2 | done |
 | 7 | Self healing verification engine | Slice 3 | done |
-| 8 | Version history snapshots and time travel rollback | Slice 4 | in-progress |
-| 9 | Managed database viewer and client data tools | Slice 5 | in-progress |
-| 10 | One click publishing and isolated live hosting | Slice 6 | in-progress |
-| 11 | Multi modal generation from images and design links | Slice 7 | in-progress |
+| 8 | Version history snapshots and time travel rollback | Slice 4 | done |
+| 9 | Managed database viewer and client data tools | Slice 5 | done |
+| 10 | One click publishing and isolated live hosting | Slice 6 | done |
+| 11 | Multi modal generation from images and design links | Slice 7 | done |
 | 12 | Template library and starter project remixing | Slice 8 | planned |
 | 13 | GitHub sync and full code export | Slice 9 | planned |
 

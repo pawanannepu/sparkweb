@@ -71,6 +71,7 @@ Declined: CodeMirror 6 skills, optional MCP servers (pglite-mcp, tanstack-mcp)
 ## Context files
 
 - [apps/web/AGENTS.md](apps/web/AGENTS.md): Next.js web application and builder workspace
+- [apps/web/src/lib/multimodal/AGENTS.md](apps/web/src/lib/multimodal/AGENTS.md): Image normalization, SSRF guarded URL inspection, and outline extraction pipeline
 - [packages/db/AGENTS.md](packages/db/AGENTS.md): PostgreSQL database schema, Drizzle client, migrations
 - [packages/sandbox/AGENTS.md](packages/sandbox/AGENTS.md): WebContainers runner and sandbox execution
 - [packages/shared/AGENTS.md](packages/shared/AGENTS.md): Shared TypeScript contracts, schemas, and utilities

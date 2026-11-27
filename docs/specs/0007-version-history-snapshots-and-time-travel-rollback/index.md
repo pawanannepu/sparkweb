@@ -1,7 +1,7 @@
 # 0007. Version history snapshots and time travel rollback
 
 **Date**: 2026-11-24
-**Status**: Implemented
+**Status**: Accepted
 
 ## Summary
 
